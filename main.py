@@ -6,27 +6,6 @@ import curses
 from threading import Thread
 from queue import Queue
 from collections import defaultdict
-from mitmproxy import proxy, options
-from mitmproxy.tools.dump import DumpMaster
-from mitmproxy.addons import core
-
-arp_table = {}
-def check_arp_spoofing(packet):
-    if packet.haslayer(ARP):
-        src_ip = packet[ARP].psrc
-        src_mac = packet[ARP].hwsrc
-        
-        if src_ip in arp_table:
-            if arp_table[src_ip] != src_mac:
-                return f"Possible ARP spoofing detected: {src_ip} changed MAC from {arp_table[src_ip]} to {src_mac}"
-        
-        arp_table[src_ip] = src_mac
-    return None
-def intercept_https(flow):
-    if flow.request.scheme == "https":
-        decrypted_content = flow.response.content.decode('utf-8', 'ignore')
-        print(f"Decrypted HTTPS: {flow.request.url}\n{decrypted_content[:100]}...")
-
 
 def is_root():
     try:
@@ -89,26 +68,21 @@ def display_packets(stdscr, packet_queue):
     try:
         packets = []
         current_index = 0
-        spoofing_alerts = []
         
         while True:
             try:
                 stdscr.clear()
                 height, width = stdscr.getmaxyx()
                 
-                # Display spoofing alerts
-                for i, alert in enumerate(spoofing_alerts[-3:]):
-                    stdscr.addstr(i, 0, alert, curses.A_BOLD | curses.color_pair(1))
-                
                 potential_attackers = detect_dos(packets)
                 if potential_attackers:
-                    stdscr.addstr(3, 0, f"Potential DoS detected from: {', '.join(potential_attackers)}", curses.A_BOLD)
+                    stdscr.addstr(0, 0, f"Potential DoS detected from: {', '.join(potential_attackers)}", curses.A_BOLD)
                 
-                for i in range(4, height - 1):
-                    if current_index + i - 4 < len(packets):
+                for i in range(1, height - 1):
+                    if current_index + i - 1 < len(packets):
                         try:
-                            packet_info = packets[current_index + i - 4][0]
-                            display_str = f"{current_index + i - 3}. {packet_info}"
+                            packet_info = packets[current_index + i - 1][0]
+                            display_str = f"{current_index + i}. {packet_info}"
                             if len(display_str) > width - 1:
                                 display_str = display_str[:width-4] + "..."
                             stdscr.addstr(i, 0, display_str)
@@ -125,8 +99,6 @@ def display_packets(stdscr, packet_queue):
                 if not packet_queue.empty():
                     new_packet = packet_queue.get()
                     packet_info = process_packet(new_packet)
-                    if packet_info.startswith("Possible ARP spoofing detected"):
-                        spoofing_alerts.append(packet_info)
                     packets.append((packet_info, new_packet))
                 
                 key = stdscr.getch()
@@ -136,10 +108,10 @@ def display_packets(stdscr, packet_queue):
                     if current_index > 0:
                         current_index -= 1
                 elif key == curses.KEY_DOWN:
-                    if current_index < len(packets) - height + 5:
+                    if current_index < len(packets) - height + 2:
                         current_index += 1
                 elif key == ord('a'):
-                    analyze_index = current_index + (height - 5) // 2
+                    analyze_index = current_index + (height - 2) // 2 - 1
                     if 0 <= analyze_index < len(packets):
                         analyze_packet(stdscr, packets, analyze_index)
 
@@ -184,9 +156,6 @@ def analyze_packet(stdscr, packets, index):
 
 def main(stdscr):
     try:
-        curses.start_color()
-        curses.init_pair(1, curses.COLOR_RED, curses.COLOR_BLACK)
-
         if is_root():
             stdscr.addstr(0, 0, "[+] You are root.")
         else:
@@ -195,15 +164,6 @@ def main(stdscr):
         curses.echo()
         interface = stdscr.getstr().decode()
         curses.noecho()
-        opts = options.Options(listen_host='0.0.0.0', listen_port=8080)
-        pconf = proxy.config.ProxyConfig(opts)
-
-        m = DumpMaster(opts)
-        m.server = proxy.server.ProxyServer(pconf)
-        m.addons.add(core.Core())
-        m.addons.add(intercept_https)
-
-        Thread(target=m.run).st
 
         packet_queue = Queue()
         sniff_thread = Thread(target=sniff_packets, args=(packet_queue, interface))
