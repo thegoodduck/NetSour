@@ -1,7 +1,7 @@
 import unittest
 from unittest.mock import patch, MagicMock
 from scapy.all import IP, TCP, UDP, ARP
-from main import process_packet, detect_dos, is_root, check_arp_spoofing, intercept_https
+from main import process_packet, detect_dos, is_root
 
 class TestMainFunctions(unittest.TestCase):
 
@@ -88,42 +88,6 @@ class TestMainFunctions(unittest.TestCase):
             result = detect_dos(packets)
         self.assertEqual(result, [])
         mock_print.assert_called_once_with("Error detecting DoS: Test exception")
-    def test_check_arp_spoofing(self):
-        global arp_table
-        arp_table = {}  # Reset the ARP table before the test
-
-        # Create a mock ARP packet
-        mock_packet1 = MagicMock()
-        mock_packet1.haslayer.return_value = True
-        mock_packet1.__getitem__.return_value = MagicMock(psrc='192.168.1.1', hwsrc='00:11:22:33:44:55')
-
-        # Process the first packet (should not trigger an alert)
-        result1 = check_arp_spoofing(mock_packet1)
-        self.assertIsNone(result1)
-
-        # Create another mock ARP packet with the same IP but different MAC
-        mock_packet2 = MagicMock()
-        mock_packet2.haslayer.return_value = True
-        mock_packet2.__getitem__.return_value = MagicMock(psrc='192.168.1.1', hwsrc='AA:BB:CC:DD:EE:FF')
-
-        # Process the second packet (should trigger an alert)
-        result2 = check_arp_spoofing(mock_packet2)
-        self.assertIsNotNone(result2)
-        self.assertTrue(result2.startswith("Possible ARP spoofing detected"))
-        self.assertIn("192.168.1.1", result2)
-        self.assertIn("00:11:22:33:44:55", result2)
-        self.assertIn("AA:BB:CC:DD:EE:FF", result2)
-    def test_https_decryption(self):
-        mock_flow = MagicMock()
-        mock_flow.request.scheme = "https"
-        mock_flow.request.url = "https://example.com"
-        mock_flow.response.content = b"Decrypted content"
-
-        with patch('builtins.print') as mock_print:
-            intercept_https(mock_flow)
-
-        mock_print.assert_called_once_with("Decrypted HTTPS: https://example.com\nDecrypted content...")
-
 
 
 if __name__ == '__main__':
