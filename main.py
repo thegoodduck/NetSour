@@ -139,17 +139,10 @@ def display_packets(stdscr, packet_queue):
                 elif key == ord('a'):
                     analyze_packet(stdscr, packets, current_index)
                 elif key == ord('s'):
-                    try:
-
-                        print('Search is a work in progress. Please wait for future updates.')                        
-                        curses.echo()
-                        stdscr.addstr(height - 1, 2, "Search: " + " " * (width - 10))
-                        stdscr.refresh()
-                        search_term = stdscr.getstr(height - 1, 10, 20).decode()
-                    except curses.error:
-                        search_term = ""
-                    finally:
-                        curses.noecho()
+                    curses.echo()
+                    stdscr.addstr(height - 1, 2, "Search: " + " " * (width - 10))
+                    search_term = stdscr.getstr(height - 1, 10, 20).decode()
+                    curses.noecho()
                 elif key == ord('c'):
                     search_term = ""
                 elif key == ord('r'):
@@ -161,6 +154,7 @@ def display_packets(stdscr, packet_queue):
                 time.sleep(2)
     except Exception as e:
         print(f"Error in display_packets: {str(e)}")
+
 
 
 
