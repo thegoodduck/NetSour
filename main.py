@@ -6,13 +6,19 @@ import curses
 from threading import Thread
 from queue import Queue
 from collections import defaultdict
-
+import argparse
+from mitmproxy import options
+from mitmproxy.tools.dump import DumpMaster
+import asyncio
 def is_root():
     try:
         return os.geteuid() == 0
     except AttributeError:
         print("Error: Unable to determine root status. This function may not be supported on your operating system.")
         return False
+def intercept_https(flow):
+    print(f"Decrypted HTTPS: {flow.request.url}")
+    print(f"Decrypted content: {flow.response.content[:100]}...")
 
 def process_packet(packet):
     try:
@@ -153,9 +159,24 @@ def analyze_packet(stdscr, packets, index):
     except Exception as e:
         print(f"Error analyzing packet: {str(e)}")
         input("\nPress Enter to return...")
+def main(stdscr=None):
+    parser = argparse.ArgumentParser(description='NetSour Network Analyzer')
+    parser.add_argument('--proxy', action='store_true', help='Enable MITM proxy')
+    args = parser.parse_args()
 
-def main(stdscr):
-    try:
+    if args.proxy:
+        opts = options.Options(listen_host='0.0.0.0', listen_port=8080)
+        m = DumpMaster(opts)
+        m.addons.add(intercept_https)
+        print("[+] Starting MITM proxy on port 8080...")
+        print("[!] Warning: MITM proxy is still in early beta development. Use at your own risk.") # TODO Remove it when out of beta
+        m.run()
+    else:
+        if stdscr is None:
+            print("Error: stdscr is required for regular NetSour functionality.")
+            return
+
+        # Existing NetSour functionality
         if is_root():
             stdscr.addstr(0, 0, "[+] You are root.")
         else:
@@ -175,11 +196,12 @@ def main(stdscr):
         time.sleep(1)
         
         display_packets(stdscr, packet_queue)
-    except Exception as e:
-        print(f"Error in main function: {str(e)}")
 
 if __name__ == "__main__":
-    try:
-        curses.wrapper(main)
+    try:    
+        if '--proxy' in sys.argv:
+            main(None)
+        else:
+            curses.wrapper(main)
     except Exception as e:
         print(f"Fatal error: {str(e)}")
