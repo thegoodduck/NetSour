@@ -77,83 +77,60 @@ def detect_dos(packets, threshold=100, time_window=1):
 
 # Here magic happens: 1 time on around 5 up/down wont work(at) least wth my keyboard
 def display_packets(stdscr, packet_queue):
-    try:
-        packets = []
-        current_index = 0
-        search_term = ""
-        auto_scroll = False
-        
-        pad = curses.newpad(10000, 100)  # Create a large pad for smooth scrolling
-        
-        while True:
-            try:
-                height, width = stdscr.getmaxyx()
-                draw_borders(stdscr)
-                
-                # Display title
-                stdscr.addstr(1, 2, "NetSour - Network Traffic Analyzer", curses.color_pair(2) | curses.A_BOLD)
-                
-                # Display potential DoS attackers
-                potential_attackers = detect_dos(packets)
-                if potential_attackers:
-                    alert = f"Potential DoS detected from: {', '.join(potential_attackers)}"
-                    stdscr.addstr(3, 2, alert[:width-4], curses.color_pair(3) | curses.A_BOLD)
-                
-                # Display packet list
-                visible_packets = height - 7
-                for i in range(visible_packets):
-                    if current_index + i < len(packets):
-                        packet_info = packets[current_index + i][0]
-                        if search_term.lower() in packet_info.lower():
-                            if i == 0:  # Highlight the selected packet
-                                pad.addstr(current_index + i, 0, f"{current_index + i + 1}. {packet_info}"[:width-4], curses.color_pair(2) | curses.A_REVERSE)
-                            else:
-                                pad.addstr(current_index + i, 0, f"{current_index + i + 1}. {packet_info}"[:width-4], curses.color_pair(1))
-                
-                pad.refresh(current_index, 0, 4, 1, height - 4, width - 2)
-                
-                # Display status bar
-                status = f"Total: {len(packets)} | Current: {current_index + 1} | Search: {search_term} | Auto-scroll: {'ON' if auto_scroll else 'OFF'}"
-                stdscr.addstr(height - 2, 2, status[:width-4], curses.color_pair(4))
-                
-                # Display menu
-                menu = "Q:Quit | ↑↓:Scroll | A:Analyze | S:Search | C:Clear search | R:Toggle Auto-scroll"
-                stdscr.addstr(height - 1, 2, menu[:width-4], curses.color_pair(2))
-                
-                stdscr.refresh()
-                
-                if not packet_queue.empty():
-                    new_packet = packet_queue.get()
-                    packet_info = process_packet(new_packet)
-                    packets.append((packet_info, new_packet))
-                    if auto_scroll:
-                        current_index = max(0, len(packets) - visible_packets)
-                
-                key = stdscr.getch()
-                if key == ord('q'):
-                    break
-                elif key == curses.KEY_UP and current_index > 0:
-                    current_index -= 1
-                elif key == curses.KEY_DOWN and current_index < len(packets) - 1:
-                    current_index += 1
-                elif key == ord('a'):
-                    analyze_packet(stdscr, packets, current_index)
-                elif key == ord('s'):
-                    curses.echo()
-                    stdscr.addstr(height - 1, 2, "Search: " + " " * (width - 10))
-                    search_term = stdscr.getstr(height - 1, 10, 20).decode()
-                    curses.noecho()
-                elif key == ord('c'):
-                    search_term = ""
-                elif key == ord('r'):
-                    auto_scroll = not auto_scroll
+    packets = []
+    current_index = 0
+    auto_scroll = True
+    pad = curses.newpad(10000, 100)
 
-            except Exception as e:
-                stdscr.addstr(height-1, 0, f"Error: {str(e)}")
-                stdscr.refresh()
-                time.sleep(2)
-    except Exception as e:
-        print(f"Error in display_packets: {str(e)}")
+    while True:
+        height, width = stdscr.getmaxyx()
+        draw_borders(stdscr)
+
+        stdscr.addstr(1, 2, "NetSour - Network Traffic Analyzer", curses.color_pair(2) | curses.A_BOLD)
+
+        visible_packets = height - 7
+        pad.clear()
+        for i, (packet_info, _) in enumerate(packets):
+            if i == current_index:
+                pad.addstr(i, 0, f"{i+1}. {packet_info}"[:width-4], curses.color_pair(2) | curses.A_REVERSE)
+            else:
+                pad.addstr(i, 0, f"{i+1}. {packet_info}"[:width-4], curses.color_pair(1))
+
+        pad_start = max(0, current_index - visible_packets + 1)
+        pad.refresh(pad_start, 0, 4, 1, height - 4, width - 2)
+
+        status = f"Total: {len(packets)} | Current: {current_index + 1} | Auto-scroll: {'ON' if auto_scroll else 'OFF'}"
+        stdscr.addstr(height - 2, 2, status[:width-4], curses.color_pair(4))
+
+        menu = "Q:Quit | ↑↓:Scroll | A:Analyze | R:Toggle Auto-scroll"
+        stdscr.addstr(height - 1, 2, menu[:width-4], curses.color_pair(2))
+
+        stdscr.refresh()
+
+        if not packet_queue.empty():
+            new_packet = packet_queue.get()
+            packet_info = process_packet(new_packet)
+            packets.append((packet_info, new_packet))
+            if auto_scroll:
+                current_index = len(packets) - 1
+
+        key = stdscr.getch()
+        if key == ord('q'):
+            break
+        elif key == curses.KEY_UP and current_index > 0:
+            current_index -= 1
+        elif key == curses.KEY_DOWN and current_index < len(packets) - 1:
+            current_index += 1
+        elif key == ord('a'):
+            analyze_packet(stdscr, packets, current_index)
+        elif key == ord('r'):
+            auto_scroll = not auto_scroll
+        if auto_scroll:
+
+            current_index = len(packets) - 1            
+            current_index = len(packets) - 1
+    return packets
+
 
 
 
@@ -208,7 +185,7 @@ def main(stdscr):
         stdscr.addstr(3, 0, "[+] Starting NetSour...")
         stdscr.refresh()
         time.sleep(1)
-        
+        os.system('cls' if os.name == 'nt' else 'clear')
         display_packets(stdscr, packet_queue)
     except Exception as e:
         print(f"Error in main function: {str(e)}")
