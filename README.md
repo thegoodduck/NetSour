@@ -34,7 +34,7 @@ Run the script with root privileges:
 
 
 sudo python main.py
-
+[![asciicast](https://asciinema.org/a/AWJUNdcp7HW1bAnN13fjkkMLA.svg)](https://asciinema.org/a/AWJUNdcp7HW1bAnN13fjkkMLA)
 
 1. Enter the network interface name when prompted
 2. Use arrow keys to navigate through captured packets
