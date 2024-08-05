@@ -5,7 +5,9 @@ import curses
 from threading import Thread
 from queue import Queue
 from collections import defaultdict
-sniffed_packets=0
+
+sniffed_packets = 0
+
 def is_root():
     try:
         return os.geteuid() == 0
@@ -51,9 +53,10 @@ def draw_borders(stdscr):
     stdscr.refresh()
 
 def sniff_packets(packet_queue, interface):
+    global sniffed_packets
     try:
         sniff(iface=interface, prn=lambda pkt: packet_queue.put(pkt), store=0)
-        sniffed_packets+=1
+        sniffed_packets += 1
     except Exception as e:
         print(f"Error sniffing packets: {str(e)}")
 
@@ -92,12 +95,18 @@ def display_packets(stdscr, packet_queue):
         visible_packets = height - 7
         pad.clear()
         search_packets = [pkt for pkt in packets if search_query.lower() in pkt[0].lower()] if search_mode else packets
+        
         for i, (packet_info, _) in enumerate(search_packets):
             line = f"{i+1}. {packet_info}"[:width-4]
             attr = curses.color_pair(2) | curses.A_REVERSE if i == current_index else curses.color_pair(1)
             pad.addstr(i, 0, line, attr)
 
-        pad_start = max(0, current_index - visible_packets + 1)
+        if auto_scroll:
+            pad_start = max(0, len(search_packets) - visible_packets)
+            current_index = len(search_packets) - 1
+        else:
+            pad_start = max(0, current_index - visible_packets // 2)
+
         pad.refresh(pad_start, 0, 4, 1, height - 4, width - 2)
 
         status = f"Total: {len(packets)} | Displayed: {len(search_packets)} | Current: {current_index + 1} | Auto-scroll: {'ON' if auto_scroll else 'OFF'}"
@@ -110,9 +119,7 @@ def display_packets(stdscr, packet_queue):
 
         if not packet_queue.empty():
             new_packet = packet_queue.get()
-            # print(f"New packet: {new_packet.summary()}")  # Debugging print
             packet_info = process_packet(new_packet)
-            # print(f"Processed packet: {packet_info}")  # Debugging print
             packets.append((packet_info, new_packet))
             if auto_scroll:
                 current_index = len(packets) - 1
@@ -122,8 +129,10 @@ def display_packets(stdscr, packet_queue):
             break
         elif key == curses.KEY_UP and current_index > 0:
             current_index -= 1
-        elif key == curses.KEY_DOWN:
+            auto_scroll = False
+        elif key == curses.KEY_DOWN and current_index < len(search_packets) - 1:
             current_index += 1
+            auto_scroll = False
         elif key == ord('a'):
             analyze_packet(stdscr, packets, current_index)
         elif key == ord('r'):
@@ -135,13 +144,9 @@ def display_packets(stdscr, packet_queue):
                 curses.echo()
                 search_query = stdscr.getstr().decode()
                 curses.noecho()
-            current_index = 0
             if not search_mode:
                 search_query = ""
 
-        if auto_scroll:
-            current_index = sniffed_packets - 1
-            # print(f"Auto-scroll current index: {current_index}")  # Debugging print
 
 def analyze_packet(stdscr, packets, index):
     try:
