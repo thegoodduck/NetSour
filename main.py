@@ -6,6 +6,12 @@ from threading import Thread
 from queue import Queue
 from collections import defaultdict
 from typing import List, Tuple, Optional
+import logging
+loggingit = False
+if loggingit:
+    logging.basicConfig(filename='netsour_debug.log', level=logging.DEBUG)
+else:
+    logging.basicConfig(filename='netsour_debug.log',  level=logging.ERROR)
 
 # Constants
 NORMAL_TEXT = 1
@@ -107,6 +113,7 @@ class UserInterface:
 
     def display_packets(self):
         while True:
+            logging.debug(f"Start of display loop. Current index: {self.current_index}")
             height, width = self.stdscr.getmaxyx()
             self.draw_borders()
             self.display_title()
@@ -124,7 +131,7 @@ class UserInterface:
             self.stdscr.refresh()
 
             self._process_new_packets()
-            
+            logging.debug(f"After processing new packets. Current index: {self.current_index}")
             key = self.stdscr.getch()
             self._handle_user_input(key, search_packets, height)
             
@@ -163,22 +170,15 @@ class UserInterface:
             new_packet = self.packet_queue.get()
             packet_info = PacketAnalyzer.process_packet(new_packet)
             self.packets.append((packet_info, new_packet))
+            logging.debug(f"New packet processed. Current index before: {self.current_index}")
             if self.auto_scroll:
                 self.current_index = len(self.packets) - 1
+                logging.debug(f"Current index after autoscroll: {self.current_index} Lenght of packets {len(self.packets)}")
+            logging.debug(f"Current index after: {self.current_index}")
 
-    def _handle_user_input(self, key: int, search_packets: List[Tuple[str, 'Packet']], height: int):
-        if key == curses.KEY_UP and self.current_index > 0:
-            self.current_index -= 1
-            self.auto_scroll = False
-        elif key == curses.KEY_DOWN and self.current_index < len(search_packets) - 1:
-            self.current_index += 1
-            self.auto_scroll = False
-        elif key == ord('a'):
-            self._analyze_packet(search_packets)
-        elif key == ord('r'):
-            self.auto_scroll = not self.auto_scroll
-        elif key == ord('f'):
-            self._toggle_search_mode(height)
+
+    
+
 
     def _toggle_search_mode(self, height: int):
         self.search_mode = not self.search_mode
@@ -188,6 +188,16 @@ class UserInterface:
             curses.echo()
             self.search_query = self.stdscr.getstr().decode()
             curses.noecho()
+    def _handle_user_input(self, key: int, search_packets: List[Tuple[str, 'Packet']], height: int):
+        logging.debug(f"User input received. Key: {key}, Current index before: {self.current_index}")
+        if key == curses.KEY_UP and self.current_index > 0:
+            self.current_index -= 1
+            self.auto_scroll = False
+        elif key == curses.KEY_DOWN and self.current_index < len(search_packets) - 1:
+            self.current_index += 1
+        elif key == ord('r'):
+            self.auto_scroll = not self.auto_scroll
+        logging.debug(f"Current index after: {self.current_index}, Auto-scroll: {self.auto_scroll}")
 
     def _analyze_packet(self, search_packets: List[Tuple[str, 'Packet']]):
         try:

@@ -3,3 +3,5 @@
 /__pycache__
 __pycache__/
 new_main.py
+netsour_debug.log
+*.log
