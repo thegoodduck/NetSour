@@ -1,231 +1,113 @@
-from scapy.all import IP, TCP, UDP, ARP, sniff, hexdump
+from scapy.all import *
+from scapy.all import IP, TCP, UDP, ARP, sniff
 import os
 import time
 import curses
-from threading import Thread
+from threading import Thread, Lock
 from queue import Queue
 from collections import defaultdict
-from typing import List, Tuple, Optional
-import logging
-loggingit = False
-if loggingit:
-    logging.basicConfig(filename='netsour_debug.log', level=logging.DEBUG)
-else:
-    logging.basicConfig(filename='netsour_debug.log',  level=logging.ERROR)
 
-# Constants
-NORMAL_TEXT = 1
-HIGHLIGHTED_TEXT = 2
-ALERT_TEXT = 3
-STATUS_BAR = 4
-TITLE_BAR = 5
-ERROR_TEXT = 6
+numbers_of_packets_processed = 0
+autoscroll = True
 
-class PacketAnalyzer:
-    @staticmethod
-    def process_packet(packet) -> str:
-        try:
-            if packet.haslayer(IP):
-                src_ip = packet[IP].src
-                dst_ip = packet[IP].dst
-                proto = packet[IP].proto
-                if packet.haslayer(TCP):
-                    src_port = packet[TCP].sport
-                    dst_port = packet[TCP].dport
-                    return f"TCP: {src_ip}:{src_port} -> {dst_ip}:{dst_port}"
-                elif packet.haslayer(UDP):
-                    src_port = packet[UDP].sport
-                    dst_port = packet[UDP].dport
-                    return f"UDP: {src_ip}:{src_port} -> {dst_ip}:{dst_port}"
-                else:
-                    return f"Other IP: {src_ip} -> {dst_ip}, Proto: {proto}"
-            elif packet.haslayer(ARP):
-                return f"ARP: {packet[ARP].psrc} -> {packet[ARP].pdst}"
-            else:
-                return f"Other: {packet.summary()}"
-        except Exception as e:
-            return f"Error processing packet: {str(e)}"
+def autoscroll_thread(lock, current_index, packets, stdscr):
+    global autoscroll
+    while True:
+        if autoscroll:
+            with lock:
+                height, _ = stdscr.getmaxyx()
+                current_index[0] = max(0, len(packets) - height + 2)
+        time.sleep(0.1)
 
-    @staticmethod
-    def detect_dos(packets: List[Tuple[str, 'Packet']], threshold: int = 100, time_window: int = 1) -> List[str]:
-        try:
-            packet_count = defaultdict(int)
-            current_time = time.time()
-
-            for _, packet in packets:
-                if packet.haslayer(IP):
-                    src_ip = packet[IP].src
-                    packet_time = packet.time
-
-                    if current_time - packet_time <= time_window:
-                        packet_count[src_ip] += 1
-
-            return [ip for ip, count in packet_count.items() if count >= threshold]
-        except Exception as e:
-            print(f"Error detecting DoS: {str(e)}")
-            return []
-
-class NetworkSniffer:
-    def __init__(self, interface: str):
-        self.interface = interface
-        self.packet_queue = Queue()
-        self.sniffed_packets = 0
-
-    def start_sniffing(self):
-        try:
-            sniff(iface=self.interface, prn=self._packet_callback, store=0)
-        except Exception as e:
-            print(f"Error sniffing packets: {str(e)}")
-
-    def _packet_callback(self, packet):
-        self.packet_queue.put(packet)
-        self.sniffed_packets += 1
-
-class UserInterface:
-    def __init__(self, stdscr, packet_queue: Queue):
-        self.stdscr = stdscr
-        self.packet_queue = packet_queue
-        self.packets: List[Tuple[str, 'Packet']] = []
-        self.current_index = 0
-        self.auto_scroll = True
-        self.search_mode = False
-        self.search_query = ""
-        self.pad = curses.newpad(10000, 100)
-
-    def setup(self):
-        curses.curs_set(0)
-        self._create_color_pairs()
-
-    def _create_color_pairs(self):
-        curses.init_pair(NORMAL_TEXT, curses.COLOR_GREEN, curses.COLOR_BLACK)
-        curses.init_pair(HIGHLIGHTED_TEXT, curses.COLOR_YELLOW, curses.COLOR_BLACK)
-        curses.init_pair(ALERT_TEXT, curses.COLOR_RED, curses.COLOR_BLACK)
-        curses.init_pair(STATUS_BAR, curses.COLOR_CYAN, curses.COLOR_BLACK)
-        curses.init_pair(TITLE_BAR, curses.COLOR_WHITE, curses.COLOR_BLUE)
-        curses.init_pair(ERROR_TEXT, curses.COLOR_WHITE, curses.COLOR_RED)
-
-    def draw_borders(self):
-        height, width = self.stdscr.getmaxyx()
-        self.stdscr.border()
-        self.stdscr.hline(2, 1, curses.ACS_HLINE, width - 2)
-        self.stdscr.hline(height - 3, 1, curses.ACS_HLINE, width - 2)
-        self.stdscr.refresh()
-
-    def display_packets(self):
-        while True:
-            logging.debug(f"Start of display loop. Current index: {self.current_index}")
-            height, width = self.stdscr.getmaxyx()
-            self.draw_borders()
-            self.display_title()
-            visible_packets = height - 7
-
-            search_packets = self._filter_packets() if self.search_mode else self.packets
-            self._display_packet_list(search_packets, width)
-            
-            pad_start = self._calculate_pad_start(search_packets, visible_packets)
-            self.pad.refresh(pad_start, 0, 4, 1, height - 4, width - 2)
-
-            self._display_status(search_packets, height, width)
-            self._display_menu(height, width)
-            
-            self.stdscr.refresh()
-
-            self._process_new_packets()
-            logging.debug(f"After processing new packets. Current index: {self.current_index}")
-            key = self.stdscr.getch()
-            self._handle_user_input(key, search_packets, height)
-            
+def handle_input(stdscr, current_index, packets, lock):
+    global autoscroll
+    while True:
+        key = stdscr.getch()
+        with lock:
+            height, _ = stdscr.getmaxyx()
             if key == ord('q'):
                 break
+            elif key == curses.KEY_UP and not autoscroll:
+                if current_index[0] > 0:
+                    current_index[0] -= 1
+            elif key == curses.KEY_DOWN and not autoscroll:
+                if current_index[0] < len(packets) - height + 2:
+                    current_index[0] += 1
+            elif key == ord("r"):
+                autoscroll = not autoscroll
 
-    def display_title(self):
-        self.stdscr.addstr(1, 2, "NetSour - Network Traffic Analyzer", curses.color_pair(HIGHLIGHTED_TEXT) | curses.A_BOLD)
+def process_packet(packet):
+    return f"Packet: {packet.summary()}"
 
-    def _filter_packets(self) -> List[Tuple[str, 'Packet']]:
-        return [pkt for pkt in self.packets if self.search_query.lower() in pkt[0].lower()]
+def detect_dos(packets):
+    # This is a placeholder function. Implement your own DoS detection logic here.
+    return []
 
-    def _display_packet_list(self, packets: List[Tuple[str, 'Packet']], width: int):
-        self.pad.clear()
-        for i, (packet_info, _) in enumerate(packets):
-            line = f"{i+1}. {packet_info}"[:width-4]
-            attr = curses.color_pair(HIGHLIGHTED_TEXT) | curses.A_REVERSE if i == self.current_index else curses.color_pair(NORMAL_TEXT)
-            self.pad.addstr(i, 0, line, attr)
+def analyze_packet(stdscr, packets, analyze_index):
+    packet_info, packet = packets[analyze_index]
+    stdscr.clear()
+    stdscr.addstr(0, 0, f"Analyzing packet {analyze_index}: {packet_info}", curses.A_BOLD)
+    stdscr.addstr(1, 0, f"Full packet: {packet.show(dump=True)}")
+    stdscr.addstr(2, 0, "Press any key to return...")
+    stdscr.refresh()
+    stdscr.getch()
 
-    def _calculate_pad_start(self, packets: List[Tuple[str, 'Packet']], visible_packets: int) -> int:
-        if self.auto_scroll:
-            return max(0, len(packets) - visible_packets)
-        else:
-            return max(0, self.current_index - visible_packets // 2)
+def display_packets(stdscr, packet_queue):
+    global autoscroll
+    try:
+        packets = []
+        current_index = [0]  # Use a list to allow modification in the thread
+        lock = Lock()
 
-    def _display_status(self, search_packets: List[Tuple[str, 'Packet']], height: int, width: int):
-        status = f"Total: {len(self.packets)} | Displayed: {len(search_packets)} | Current: {self.current_index + 1} | Auto-scroll: {'ON' if self.auto_scroll else 'OFF'}"
-        self.stdscr.addstr(height - 2, 2, status[:width-4], curses.color_pair(STATUS_BAR))
+        autoscroll_t = Thread(target=autoscroll_thread, args=(lock, current_index, packets, stdscr))
+        autoscroll_t.daemon = True
+        autoscroll_t.start()
 
-    def _display_menu(self, height: int, width: int):
-        menu = "Q:Quit | ↑↓:Scroll | A:Analyze | R:Toggle Auto-scroll | F:Search"
-        self.stdscr.addstr(height - 1, 2, menu[:width-4], curses.color_pair(HIGHLIGHTED_TEXT))
+        input_t = Thread(target=handle_input, args=(stdscr, current_index, packets, lock))
+        input_t.daemon = True
+        input_t.start()
 
-    def _process_new_packets(self):
-        if not self.packet_queue.empty():
-            new_packet = self.packet_queue.get()
-            packet_info = PacketAnalyzer.process_packet(new_packet)
-            self.packets.append((packet_info, new_packet))
-            logging.debug(f"New packet processed. Current index before: {self.current_index}")
-            if self.auto_scroll:
-                self.current_index = len(self.packets) - 1
-                logging.debug(f"Current index after autoscroll: {self.current_index} Lenght of packets {len(self.packets)}")
-            logging.debug(f"Current index after: {self.current_index}")
+        while True:
+            stdscr.clear()
+            height, width = stdscr.getmaxyx()
+            
+            potential_attackers = detect_dos(packets)
+            if potential_attackers:
+                stdscr.addstr(0, 0, f"Potential DoS detected from: {', '.join(potential_attackers)}", curses.A_BOLD)
+            
+            for i in range(1, height - 1):
+                if current_index[0] + i - 1 < len(packets):
+                    try:
+                        packet_info = packets[current_index[0] + i - 1][0]
+                        display_str = f"{current_index[0] + i}. {packet_info}"
+                        if len(display_str) > width - 1:
+                            display_str = display_str[:width-4] + "..."
+                        stdscr.addstr(i, 0, display_str)
+                    except curses.error:
+                        pass
 
+            stdscr.addstr(height-1, 0, "Press 'q' to quit, arrow keys to scroll, 'a' to analyze packet")
+            stdscr.refresh()
+            
+            if not packet_queue.empty():
+                new_packet = packet_queue.get()
+                packet_info = process_packet(new_packet)
+                with lock:
+                    packets.append((packet_info, new_packet))
+            
+            # Add a small delay to slow down the refresh rate
+            time.sleep(0.1)  # Adjust this value to control the refresh rate
+                    
+    except Exception as e:
+        print(f"Error in display_packets: {str(e)}")
 
+def packet_sniffer(packet_queue):
+    def packet_handler(packet):
+        packet_queue.put(packet)
     
+    sniff(prn=packet_handler, store=False)
 
-
-    def _toggle_search_mode(self, height: int):
-        self.search_mode = not self.search_mode
-        self.search_query = ""
-        if self.search_mode:
-            self.stdscr.addstr(height - 1, 2, "Search Query: ")
-            curses.echo()
-            self.search_query = self.stdscr.getstr().decode()
-            curses.noecho()
-    def _handle_user_input(self, key: int, search_packets: List[Tuple[str, 'Packet']], height: int):
-        logging.debug(f"User input received. Key: {key}, Current index before: {self.current_index}")
-        if key == curses.KEY_UP and self.current_index > 0:
-            self.current_index -= 1
-            self.auto_scroll = False
-        elif key == curses.KEY_DOWN and self.current_index < len(search_packets) - 1:
-            self.current_index += 1
-        elif key == ord('r'):
-            self.auto_scroll = not self.auto_scroll
-        logging.debug(f"Current index after: {self.current_index}, Auto-scroll: {self.auto_scroll}")
-
-    def _analyze_packet(self, search_packets: List[Tuple[str, 'Packet']]):
-        try:
-            _, packet = search_packets[self.current_index]
-
-            curses.endwin()
-            os.system('cls' if os.name == 'nt' else 'clear')
-
-            print("Packet details:")
-            print(packet.show(dump=True))
-
-            print("\nPacket content:")
-            if packet.haslayer(TCP):
-                print(f"TCP: {packet[IP].src}:{packet[TCP].sport} -> {packet[IP].dst}:{packet[TCP].dport}")
-            elif packet.haslayer(UDP):
-                print(f"UDP: {packet[IP].src}:{packet[UDP].sport} -> {packet[IP].dst}:{packet[UDP].dport}")
-            hexdump(packet)
-            print("\nPress Enter to return...")
-            input()
-
-            self.stdscr.clear()
-            curses.curs_set(0)
-            self.stdscr.refresh()
-        except Exception as e:
-            print(f"Error analyzing packet: {str(e)}")
-            input("\nPress Enter to return...")
-
-def is_root() -> bool:
+def is_root():
     try:
         return os.geteuid() == 0
     except AttributeError:
@@ -233,30 +115,25 @@ def is_root() -> bool:
 
 def main(stdscr):
     try:
-        ui = UserInterface(stdscr, Queue())
-        ui.setup()
-
         if is_root():
-            stdscr.addstr(0, 0, "[+] You are root.", curses.color_pair(TITLE_BAR))
+            stdscr.addstr(0, 0, "[+] You are root.")
         else:
-            stdscr.addstr(0, 0, "[-] You are not root.", curses.color_pair(ERROR_TEXT))
+            stdscr.addstr(0, 0, "[-] You are not root.")
         stdscr.addstr(1, 0, "[+] Enter the interface name: ")
         curses.echo()
         interface = stdscr.getstr().decode()
         curses.noecho()
 
-        sniffer = NetworkSniffer(interface)
-        sniff_thread = Thread(target=sniffer.start_sniffing)
+        packet_queue = Queue()
+        sniff_thread = Thread(target=packet_sniffer, args=(packet_queue,))
         sniff_thread.daemon = True
         sniff_thread.start()
-
-        stdscr.addstr(3, 0, "[+] Starting NetSour...", curses.color_pair(TITLE_BAR))
+        
+        stdscr.addstr(3, 0, "[+] Starting NetSour...")
         stdscr.refresh()
-        stdscr.clear()
         time.sleep(1)
-        os.system('cls' if os.name == 'nt' else 'clear')
-        ui.packet_queue = sniffer.packet_queue
-        ui.display_packets()
+        
+        display_packets(stdscr, packet_queue)
     except Exception as e:
         print(f"Error in main function: {str(e)}")
 
