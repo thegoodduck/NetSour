@@ -4,6 +4,7 @@ import time
 import curses
 from threading import Thread, Lock
 from queue import Queue
+import nmap
 
 numbers_of_packets_processed = 0
 autoscroll = True
@@ -48,7 +49,7 @@ def handle_input(stdscr, current_index, packets, lock, selected_packet, content_
             elif key == curses.KEY_NPAGE:
                 content_scroll[0] += height // 2
             elif key == ord('\t'):
-                tab_index[0] = (tab_index[0] + 1) % 3  # Cycle through tabs
+                tab_index[0] = (tab_index[0] + 1) % 4  # Cycle through tabs
             elif key == ord('t'):  # Toggle TCP filter
                 filters["TCP"] = not filters["TCP"]
             elif key == ord('u'):  # Toggle UDP filter
@@ -61,6 +62,11 @@ def handle_input(stdscr, current_index, packets, lock, selected_packet, content_
 def process_packet(packet):
     return f"Packet: {packet.summary()}"
 
+def perform_nmap_scan(ip):
+    nm = nmap.PortScanner()
+    nm.scan(ip, arguments='-F')  # Fast scan
+    return nm[ip]
+
 def display_packets(stdscr, packet_queue):
     global autoscroll, filters
     try:
@@ -69,7 +75,7 @@ def display_packets(stdscr, packet_queue):
         current_index = [0]  # Current scroll position in the packet list
         selected_packet = [0]  # Currently selected packet
         content_scroll = [0]  # Scroll position within the packet details
-        tab_index = [0]  # Current tab (0: Summary, 1: Content, 2: Hexdump)
+        tab_index = [0]  # Current tab (0: Summary, 1: Content, 2: Hexdump, 3: Nmap Scan)
         lock = Lock()
 
         curses.start_color()
@@ -95,7 +101,7 @@ def display_packets(stdscr, packet_queue):
 
             # Header
             stdscr.attron(curses.color_pair(1))
-            stdscr.addstr(0, 0, f"NetSour - Packet Analyzer (Tab: {['Summary', 'Content', 'Hexdump'][tab_index[0]]})", curses.A_BOLD)
+            stdscr.addstr(0, 0, f"NetSour - Packet Analyzer (Tab: {['Summary', 'Content', 'Hexdump', 'Nmap Scan'][tab_index[0]]})", curses.A_BOLD)
             stdscr.attroff(curses.color_pair(1))
 
             # Display active filters
@@ -147,6 +153,19 @@ def display_packets(stdscr, packet_queue):
                         if i + 2 >= height:
                             break
                         stdscr.addstr(i + 2, packet_list_width + 1, line[:width - packet_list_width - 2])
+
+                elif tab_index[0] == 3:  # Nmap Scan view
+                    if IP in packet:
+                        src_ip = packet[IP].src
+                        scan_result = perform_nmap_scan(src_ip)
+                        scan_lines = [f"Nmap scan results for {src_ip}:"]
+                        scan_lines.extend([f"Port {port}: {scan_result['tcp'][port]['state']}" for port in scan_result['tcp']])
+                        for i, line in enumerate(scan_lines[content_scroll[0]:]):
+                            if i + 2 >= height:
+                                break
+                            stdscr.addstr(i + 2, packet_list_width + 1, line[:width - packet_list_width - 2])
+                    else:
+                        stdscr.addstr(2, packet_list_width + 1, "No IP information available for this packet")
 
             # Footer with instructions
             stdscr.attron(curses.color_pair(1))
