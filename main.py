@@ -5,11 +5,19 @@ import curses
 from threading import Thread, Lock
 from queue import Queue
 import nmap
-
+import ipaddress
 numbers_of_packets_processed = 0
 autoscroll = True
 filters = {"TCP": True, "UDP": True, "ARP": True, "ICMP": True}
-
+def detect_ip_spoofing(packet):
+    if IP in packet:
+        src_ip = packet[IP].src
+        if ipaddress.ip_address(src_ip).is_private:
+            return False
+        if src_ip.startswith('127.') or src_ip.startswith('0.'):
+            return True
+        # Add more checks here for known invalid or reserved IP ranges
+    return False
 def autoscroll_thread(lock, current_index, packets, stdscr, selected_packet):
     global autoscroll
     while True:
@@ -60,7 +68,10 @@ def handle_input(stdscr, current_index, packets, lock, selected_packet, content_
                 filters["ICMP"] = not filters["ICMP"]
 
 def process_packet(packet):
-    return f"Packet: {packet.summary()}"
+    packet_info = f"Packet: {packet.summary()}"
+    if detect_ip_spoofing(packet):
+        packet_info += " [POSSIBLE IP SPOOFING DETECTED]"
+    return packet_info
 
 def perform_nmap_scan(ip, nmap_queue):
     nm = nmap.PortScanner()
@@ -106,7 +117,9 @@ def display_packets(stdscr, packet_queue, nmap_queue):
                        (filters["ARP"] and ARP in new_packet) or \
                        (filters["ICMP"] and ICMP in new_packet):
                         filtered_packets.append((packet_info, new_packet))
-                    
+                    if "[POSSIBLE IP SPOOFING DETECTED]" in packet_info:
+                        stdscr.attron(curses.color_pair(2))  # Use red color for spoofing alerts
+                        stdscr.addstr(height-2, 0, "IP Spoofing Detected!")
                     if IP in new_packet:
                         src_ip = new_packet[IP].src
                         with nmap_lock:
