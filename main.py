@@ -29,8 +29,6 @@ def handle_input(stdscr, current_index, packets, lock, selected_packet, content_
         key = stdscr.getch()
         with lock:
             height, _ = stdscr.getmaxyx()
-            if key == ord('q'):
-                break
             elif key == curses.KEY_UP and not autoscroll:
                 if selected_packet[0] > 0:
                     selected_packet[0] -= 1
@@ -195,7 +193,7 @@ def display_packets(stdscr, packet_queue, nmap_queue):
 
                 # Footer with instructions
                 stdscr.attron(curses.color_pair(1))
-                stdscr.addstr(height-1, 0, "Press 'q' to quit, 'r' to toggle autoscroll, arrows to scroll/select, 'c' to jump to current, 't/u/a/i' to toggle filters, Tab to switch views")
+                stdscr.addstr(height-1, 0, "Press 'CTRL-C' to quit, 'r' to toggle autoscroll, arrows to scroll/select, 'c' to jump to current, 't/u/a/i' to toggle filters, Tab to switch views")
                 stdscr.attroff(curses.color_pair(1))
                 stdscr.refresh()
 
@@ -237,4 +235,7 @@ def main(stdscr):
     display_thread.join()
 
 if __name__ == "__main__":
-    curses.wrapper(main)
+    try:
+        curses.wrapper(main)
+    except KeyboardInterrupt:
+        print("Exiting...")
