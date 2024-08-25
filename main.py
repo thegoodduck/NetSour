@@ -29,7 +29,7 @@ def handle_input(stdscr, current_index, packets, lock, selected_packet, content_
         key = stdscr.getch()
         with lock:
             height, _ = stdscr.getmaxyx()
-            elif key == curses.KEY_UP and not autoscroll:
+            if key == curses.KEY_UP and not autoscroll:
                 if selected_packet[0] > 0:
                     selected_packet[0] -= 1
                     if selected_packet[0] < current_index[0]:
