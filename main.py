@@ -5,7 +5,8 @@ import curses
 from threading import Thread, Lock
 from queue import Queue
 import nmap
-
+ifaces = [iface for iface in os.listdir('/sys/class/net/') if iface != 'lo']
+answer = input(f"Enter your interface(detected: {ifaces}) if you want, you can simply press enter to keep the default:  ")
 numbers_of_packets_processed = 0
 autoscroll = True
 filters = {"TCP": True, "UDP": True, "ARP": True, "ICMP": True}
@@ -214,8 +215,7 @@ def packet_capture(packet_queue):
     sniff(iface=iface, prn=lambda x: packet_queue.put(x))
 
 def get_default_iface():
-    ifaces = [iface for iface in os.listdir('/sys/class/net/') if iface != 'lo']
-    return ifaces[0] if ifaces else 'eth0'
+    return answer
 
 def main(stdscr):
     packet_queue = Queue()
