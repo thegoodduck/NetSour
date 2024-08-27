@@ -6,7 +6,7 @@ from threading import Thread, Lock
 from queue import Queue
 import nmap
 ifaces = [iface for iface in os.listdir('/sys/class/net/') if iface != 'lo']
-answer = input(f"Enter your interface(detected: {ifaces}) if you want, you can simply press enter to keep the default:  ")
+answer = input(f"Enter your interface(detected: {ifaces}) :  ")
 numbers_of_packets_processed = 0
 autoscroll = True
 filters = {"TCP": True, "UDP": True, "ARP": True, "ICMP": True}
@@ -193,7 +193,8 @@ def display_packets(stdscr, packet_queue, nmap_queue):
 
             # Footer with instructions
             stdscr.attron(curses.color_pair(1))
-            stdscr.addstr(height-1, 0, "Press 'q' to quit, 'r' to toggle autoscroll, arrows to scroll/select, 'c' to jump to current, 't/u/a/i' to toggle filters, Tab to switch views")
+            # Menu underground
+            stdscr.addstr(height-1, 0, "Press CTRL-C to quit, 'r' to toggle autoscroll, arrows to scroll/select, 'c' to jump to current, 't/u/a/i' to toggle filters, Tab to switch views")
             stdscr.attroff(curses.color_pair(1))
             stdscr.refresh()
 
@@ -232,4 +233,7 @@ def main(stdscr):
     display_thread.join()
 
 if __name__ == "__main__":
-    curses.wrapper(main)
+    try:
+        curses.wrapper(main)
+    except KeyboardInterrupt:
+        print("Have a good day! Made with love by @thegoodduck")
