@@ -25,7 +25,7 @@ jobs:
     - name: Set up Python
       uses: actions/setup-python@v3
       with:
-        python-version: '3.x'
+        python-version: '3.6'
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
@@ -35,5 +35,5 @@ jobs:
     - name: Publish package
       uses: pypa/gh-action-pypi-publish@27b31702a0e7fc50959f5ad993c78deac1bdfc29
       with:
-        user: __token__
+        user: thegoodduck
         password: pypi-AgEIcHlwaS5vcmcCJGExMmMwNDZjLTQ4OWQtNDU3Ni05MmZjLTVlMDJjN2UwNGVmZQACKlszLCI5YTMxMTIzOS02ZWY3LTQ5MTctODY5MC03YTZkNDRiOWYxZTYiXQAABiAal8bbt4zPE98y56vWnpyoG5TLypZsodRNbGHJy4N7aw
