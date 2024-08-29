@@ -235,7 +235,7 @@ def display_packets(stdscr, packet_queue, nmap_queue):
 
             # Footer: Extended commands info
             stdscr.attron(curses.color_pair(2))
-            footer_text = "Press 'q' to quit | 'r' to toggle autoscroll | 'Tab' to change tab | 'n' to run Nmap scan | 't/u/a/i' to toggle filters (TCP/UDP/ARP/ICMP) | 'Ctrl-C' to quit"
+            footer_text = "Press 'r' to toggle autoscroll | 'Tab' to change tab | 'n' to run Nmap scan | 't/u/a/i' to toggle filters (TCP/UDP/ARP/ICMP) | 'Ctrl-C' to quit"
             stdscr.addstr(height - 1, 0, footer_text[:width], curses.A_BOLD)
             stdscr.attroff(curses.color_pair(2))
 
