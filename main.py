@@ -243,8 +243,7 @@ def display_packets(stdscr, packet_queue, nmap_queue):
             time.sleep(0.1)
     except KeyboardInterrupt:
         pass
-
-if __name__ == '__main__':
+def main():
     packet_queue = Queue()
     nmap_queue = Queue()
 
@@ -258,3 +257,5 @@ if __name__ == '__main__':
     sniff_thread.start()
 
     curses.wrapper(display_packets, packet_queue, nmap_queue)
+if __name__ == '__main__':
+   main()
