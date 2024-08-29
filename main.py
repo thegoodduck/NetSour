@@ -5,11 +5,26 @@ import curses
 from threading import Thread, Lock
 from queue import Queue
 import nmap
+import requests
+
 ifaces = [iface for iface in os.listdir('/sys/class/net/') if iface != 'lo']
 answer = input(f"Enter your interface(detected: {ifaces}) :  ")
 numbers_of_packets_processed = 0
 autoscroll = True
 filters = {"TCP": True, "UDP": True, "ARP": True, "ICMP": True}
+
+def get_location(ip_address):
+    try:
+        response = requests.get(f'https://ipapi.co/{ip_address}/json/').json()
+        location_data = {
+            "ip": ip_address,
+            "city": response.get("city"),
+            "region": response.get("region"),
+            "country": response.get("country_name")
+        }
+        return location_data
+    except Exception as e:
+        return {"error": str(e)}
 
 def autoscroll_thread(lock, current_index, packets, stdscr, selected_packet):
     global autoscroll
@@ -21,7 +36,7 @@ def autoscroll_thread(lock, current_index, packets, stdscr, selected_packet):
                 selected_packet[0] = current_index[0]
         time.sleep(0.1)
 
-def handle_input(stdscr, current_index, packets, lock, selected_packet, content_scroll, tab_index):
+def handle_input(stdscr, current_index, packets, lock, selected_packet, content_scroll, tab_index, nmap_queue, nmap_results):
     global autoscroll, filters
     while True:
         key = stdscr.getch()
@@ -50,7 +65,7 @@ def handle_input(stdscr, current_index, packets, lock, selected_packet, content_
             elif key == curses.KEY_NPAGE:
                 content_scroll[0] += height // 2
             elif key == ord('\t'):
-                tab_index[0] = (tab_index[0] + 1) % 4
+                tab_index[0] = (tab_index[0] + 1) % 5
             elif key == ord('t'):  # Toggle TCP filter
                 filters["TCP"] = not filters["TCP"]
             elif key == ord('u'):  # Toggle UDP filter
@@ -59,6 +74,15 @@ def handle_input(stdscr, current_index, packets, lock, selected_packet, content_
                 filters["ARP"] = not filters["ARP"]
             elif key == ord('i'):  # Toggle ICMP filter
                 filters["ICMP"] = not filters["ICMP"]
+            elif key == ord('n'):  # Trigger a manual Nmap scan
+                if packets and 0 <= selected_packet[0] < len(packets):
+                    packet = packets[selected_packet[0]][1]
+                    if IP in packet:
+                        src_ip = packet[IP].src
+                        if src_ip not in nmap_results:
+                            nmap_thread = Thread(target=perform_nmap_scan, args=(src_ip, nmap_queue))
+                            nmap_thread.daemon = True
+                            nmap_thread.start()
 
 def process_packet(packet):
     return f"Packet: {packet.summary()}"
@@ -66,7 +90,7 @@ def process_packet(packet):
 def perform_nmap_scan(ip, nmap_queue):
     nm = nmap.PortScanner()
     nm.scan(ip, arguments='-F')
-    nmap_queue.put(nm[ip])
+    nmap_queue.put((ip, nm[ip]))
 
 def display_packets(stdscr, packet_queue, nmap_queue):
     global autoscroll, filters
@@ -92,7 +116,7 @@ def display_packets(stdscr, packet_queue, nmap_queue):
         autoscroll_t.daemon = True
         autoscroll_t.start()
 
-        input_t = Thread(target=handle_input, args=(stdscr, current_index, filtered_packets, lock, selected_packet, content_scroll, tab_index))
+        input_t = Thread(target=handle_input, args=(stdscr, current_index, filtered_packets, lock, selected_packet, content_scroll, tab_index, nmap_queue, nmap_results))
         input_t.daemon = True
         input_t.start()
 
@@ -116,6 +140,12 @@ def display_packets(stdscr, packet_queue, nmap_queue):
                                 nmap_thread.daemon = True
                                 nmap_thread.start()
 
+            # Process Nmap results
+            if not nmap_queue.empty():
+                ip, scan_result = nmap_queue.get()
+                with nmap_lock:
+                    nmap_results[ip] = scan_result
+
             # Refresh screen
             stdscr.clear()
             height, width = stdscr.getmaxyx()
@@ -124,7 +154,7 @@ def display_packets(stdscr, packet_queue, nmap_queue):
 
             # Header
             stdscr.attron(curses.color_pair(1))
-            stdscr.addstr(0, 0, f"NetSour - Packet Analyzer (Tab: {['Summary', 'Content', 'Hexdump', 'Nmap Scan'][tab_index[0]]})", curses.A_BOLD)
+            stdscr.addstr(0, 0, f"NetSour - Packet Analyzer (Tab: {['Summary', 'Content', 'Hexdump', 'Nmap Scan', 'Geo-Ping'][tab_index[0]]})", curses.A_BOLD)
             stdscr.attroff(curses.color_pair(1))
 
             # Display active filters
@@ -134,7 +164,7 @@ def display_packets(stdscr, packet_queue, nmap_queue):
             stdscr.addstr(1, 0, filter_str.strip(), curses.color_pair(1))
 
             # Packet list
-            for i in range(2, height - 2):
+            for i in range(2, height - 4):  # Adjust to leave space for footer
                 if current_index[0] + i - 2 < len(filtered_packets):
                     packet_info = filtered_packets[current_index[0] + i - 2][0]
                     display_str = f"{current_index[0] + i - 1}. {packet_info}"
@@ -156,24 +186,21 @@ def display_packets(stdscr, packet_queue, nmap_queue):
                 if tab_index[0] == 0:  # Summary view
                     summary = packet.summary().splitlines()
                     for i, line in enumerate(summary[content_scroll[0]:]):
-                        if i + 2 >= height:
+                        if i + 2 >= height - 2:
                             break
                         stdscr.addstr(i + 2, packet_list_width + 1, line[:width - packet_list_width - 2])
-
-                elif tab_index[0] == 1:  # Detailed content view
-                    packet_content = packet.show(dump=True).splitlines()
-                    for i, line in enumerate(packet_content[content_scroll[0]:]):
-                        if i + 2 >= height:
+                elif tab_index[0] == 1:  # Content view
+                    content = packet.show(dump=True).splitlines()
+                    for i, line in enumerate(content[content_scroll[0]:]):
+                        if i + 2 >= height - 1:
                             break
                         stdscr.addstr(i + 2, packet_list_width + 1, line[:width - packet_list_width - 2])
-
                 elif tab_index[0] == 2:  # Hexdump view
-                    packet_hexdump = hexdump(packet, dump=True).splitlines()
-                    for i, line in enumerate(packet_hexdump[content_scroll[0]:]):
-                        if i + 2 >= height:
+                    hexdump_lines = hexdump(packet, dump=True).splitlines()
+                    for i, line in enumerate(hexdump_lines[content_scroll[0]:]):
+                        if i + 2 >= height - 1:
                             break
                         stdscr.addstr(i + 2, packet_list_width + 1, line[:width - packet_list_width - 2])
-
                 elif tab_index[0] == 3:  # Nmap Scan view
                     if IP in packet:
                         src_ip = packet[IP].src
@@ -181,7 +208,10 @@ def display_packets(stdscr, packet_queue, nmap_queue):
                             if src_ip in nmap_results:
                                 scan_result = nmap_results[src_ip]
                                 scan_lines = [f"Nmap scan results for {src_ip}:"]
-                                scan_lines.extend([f"Port {port}: {scan_result['tcp'][port]['state']}" for port in scan_result['tcp']])
+                                if 'tcp' in scan_result:
+                                    scan_lines.extend([f"Port {port}: {scan_result['tcp'][port]['state']}" for port in scan_result['tcp']])
+                                else:
+                                    scan_lines.append("No open TCP ports found.")
                                 for i, line in enumerate(scan_lines[content_scroll[0]:]):
                                     if i + 2 >= height:
                                         break
@@ -189,51 +219,42 @@ def display_packets(stdscr, packet_queue, nmap_queue):
                             else:
                                 stdscr.addstr(2, packet_list_width + 1, "No Nmap results available.")
                     else:
-                        stdscr.addstr(2, packet_list_width + 1, "No IP information available for this packet")
+                        stdscr.addstr(2, packet_list_width + 1, "No IP information available for this packet.")
+                elif tab_index[0] == 4:  # Geolocation info
+                    if IP in packet:
+                        src_ip = packet[IP].src
+                        location_data = get_location(src_ip)
+                        location_str = f"IP: {location_data.get('ip', 'N/A')}\n"
+                        location_str += f"City: {location_data.get('city', 'N/A')}\n"
+                        location_str += f"Region: {location_data.get('region', 'N/A')}\n"
+                        location_str += f"Country: {location_data.get('country', 'N/A')}\n"
+                        for i, line in enumerate(location_str.splitlines()):
+                            if i + 2 >= height - 1:
+                                break
+                            stdscr.addstr(i + 2, packet_list_width + 1, line[:width - packet_list_width - 2])
 
-            # Footer with instructions
-            stdscr.attron(curses.color_pair(1))
-            # Menu underground
-            stdscr.addstr(height-1, 0, "Press CTRL-C to quit, 'r' to toggle autoscroll, arrows to scroll/select, 'c' to jump to current, 't/u/a/i' to toggle filters, Tab to switch views")
-            stdscr.attroff(curses.color_pair(1))
+            # Footer: Extended commands info
+            stdscr.attron(curses.color_pair(2))
+            footer_text = "Press 'q' to quit | 'r' to toggle autoscroll | 'Tab' to change tab | 'n' to run Nmap scan | 't/u/a/i' to toggle filters (TCP/UDP/ARP/ICMP) | 'Ctrl-C' to quit"
+            stdscr.addstr(height - 1, 0, footer_text[:width], curses.A_BOLD)
+            stdscr.attroff(curses.color_pair(2))
+
             stdscr.refresh()
-
-            # Process Nmap results
-            while not nmap_queue.empty():
-                result = nmap_queue.get()
-                if IP in filtered_packets[selected_packet[0]][1]:
-                    src_ip = filtered_packets[selected_packet[0]][1][IP].src
-                    with nmap_lock:
-                        nmap_results[src_ip] = result
-
             time.sleep(0.1)
+    except KeyboardInterrupt:
+        pass
 
-    except Exception as e:
-        print(f"Error in display_packets: {str(e)}")
-
-def packet_capture(packet_queue):
-    iface = get_default_iface()
-    sniff(iface=iface, prn=lambda x: packet_queue.put(x))
-
-def get_default_iface():
-    return answer
-
-def main(stdscr):
+if __name__ == '__main__':
     packet_queue = Queue()
     nmap_queue = Queue()
 
-    capture_thread = Thread(target=packet_capture, args=(packet_queue,))
-    capture_thread.daemon = True
-    capture_thread.start()
+    def packet_sniffer(packet):
+        global numbers_of_packets_processed
+        packet_queue.put(packet)
+        numbers_of_packets_processed += 1
 
-    display_thread = Thread(target=display_packets, args=(stdscr, packet_queue, nmap_queue))
-    display_thread.daemon = True
-    display_thread.start()
+    sniff_thread = Thread(target=sniff, kwargs={"iface": answer, "prn": packet_sniffer})
+    sniff_thread.daemon = True
+    sniff_thread.start()
 
-    display_thread.join()
-
-if __name__ == "__main__":
-    try:
-        curses.wrapper(main)
-    except KeyboardInterrupt:
-        print("Have a good day! Made with love by @thegoodduck")
+    curses.wrapper(display_packets, packet_queue, nmap_queue)
