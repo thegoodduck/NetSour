@@ -24,10 +24,10 @@ from .render import (Glyphs, addstr, box, clamp, detect_unicode, ellipsize,
 from .theme import THEME_SPECS, THEMES, Palette
 
 VIEWS = ["Packets", "Devices", "Flows", "Stats", "Alerts", "Hosts", "Recon",
-         "OSINT"]
+         "OSINT", "Dash"]
 # Named so that inserting a view never means renumbering conditionals by hand.
 (PACKETS_VIEW, DEVICES_VIEW, FLOWS_VIEW, STATS_VIEW, ALERTS_VIEW, HOSTS_VIEW,
- RECON_VIEW, OSINT_VIEW) = range(len(VIEWS))
+ RECON_VIEW, OSINT_VIEW, DASH_VIEW) = range(len(VIEWS))
 DETAIL_MODES = ["tree", "hex", "stream", "geo", "nmap"]
 FLOW_SORTS = ["bytes", "packets", "last", "duration", "rate"]
 
@@ -78,6 +78,11 @@ HELP_SECTIONS = [
         ("G", "geolocate the selected addresses (external HTTP lookup)"),
         ("S", "ARP-sweep the local /24 to enumerate hosts"),
     ]),
+    ("Dashboard and addons", [
+        ("9", "the dashboard - built-in cards plus anything addons drew"),
+        ("Enter", "choose which cards the board shows"),
+        ("A", "addons: reload from disk, or scaffold a new one"),
+    ]),
     ("Appearance", [
         ("T", "cycle the colour theme"),
         ("Ctrl-L", "force a full redraw"),
@@ -100,6 +105,7 @@ class App:
         self.detail_mode = "tree"
         self.detail_length = 0
         self.osint_length = 0
+        self.dash_length = 0                   # virtual height of the card board
         self.focus = "list"                    # "list" | "detail"
         self.follow = True
         self.running = True
@@ -185,6 +191,12 @@ class App:
         if not force and now - self._derived_at < 0.25:
             return
         self._derived_at = now
+        if self.view == DASH_VIEW:
+            # Panels render inside derive(), so they have to be told how wide
+            # their card will be before the frame is built.
+            width = self.stdscr.getmaxyx()[1]
+            self.session.addons.configure(views.dashboard_card_width(width - 2),
+                                          self.glyphs.unicode)
         self.derived = self.session.derive(
             flow_sort=self.flow_sort,
             alert_sort=self.alert_sort,
@@ -194,6 +206,7 @@ class App:
             want_alerts=self.view == ALERTS_VIEW,
             want_hosts=self.view == HOSTS_VIEW,
             want_stats=self.view == STATS_VIEW,
+            want_panels=self.view == DASH_VIEW,
         )
 
     # Views read these; they are plain lists copied under the session lock.
@@ -382,12 +395,18 @@ class App:
         if char == "T":
             self._choose_theme()
             return
+        if char == "A":
+            self._addons_menu()
+            return
         if char == "s":
             self._cycle_sort()
             return
         if char == "y":
             self._yank()
             return
+
+        # Addon bindings come last, so an addon can never shadow a NetSour key.
+        self.session.addons.handle_key(char, self)
 
     def _view_key(self, key: int, char: str) -> bool:
         """Keys that mean something different depending on the active view."""
@@ -421,6 +440,9 @@ class App:
                             else "Hiding devices last seen minutes ago",
                             "accent")
                 return True
+        if self.view == DASH_VIEW and key in (curses.KEY_ENTER, 10, 13):
+            self._dashboard_menu()
+            return True
         if self.view == ALERTS_VIEW and key in (curses.KEY_ENTER, 10, 13):
             self._alert_actions()
             return True
@@ -962,6 +984,106 @@ class App:
         self.open_menu("Actions for this row", items, self._alert_action,
                        footer="Esc cancels")
 
+    # ---- dashboard and addons ---------------------------------------------
+
+    def _dash_hint(self) -> str:
+        """The pane subtitle: how much of the board came from where."""
+        panels = self.derived.panels
+        contributed = sum(1 for panel in panels if panel.source != "built-in")
+        parts = [f"{len(panels)} cards"]
+        if contributed:
+            parts.append(f"{contributed} from addons")
+        broken = [a.name for a in self.session.addons.addons
+                  if a.status == "failed"]
+        if broken:
+            parts.append(f"{len(broken)} addon(s) failing")
+        return " · ".join(parts)
+
+    def _dashboard_menu(self) -> None:
+        """Pick which cards the board shows. The choice is remembered on disk."""
+        registry = self.session.addons
+        items = [MenuItem("Cards — Enter shows or hides one")]
+        for spec in registry.panel_specs(include_hidden=True):
+            shown = spec.key not in registry.hidden
+            mark = self.glyphs["check"] if shown else " "
+            items.append(MenuItem(f"{mark} {spec.title}", spec.source, spec.key,
+                                  role="base" if shown else "dim"))
+        items.append(MenuItem(""))
+        items.append(MenuItem("Addons…", "reload, scaffold, inspect",
+                              "\0addons"))
+        self.open_menu("Dashboard", items, self._toggle_card,
+                       footer="Esc closes · the layout is saved")
+
+    def _toggle_card(self, key: str) -> None:
+        if key == "\0addons":
+            self._addons_menu()
+            return
+        visible = self.session.addons.toggle_panel(key)
+        self.refresh_derived(force=True)
+        self.notify(f"Card {'shown' if visible else 'hidden'}",
+                    "ok" if visible else "dim", seconds=2)
+        self._dashboard_menu()              # stay open: toggling one is rare
+
+    def _addons_menu(self) -> None:
+        registry = self.session.addons
+        directory = registry.directory
+        items = [
+            MenuItem("Reload addons", f"re-read {directory}", ("reload", None)),
+            MenuItem("New addon…", "write a starter file, ready to edit",
+                     ("new", None)),
+            MenuItem("Choose dashboard cards", "show or hide cards",
+                     ("cards", None)),
+            MenuItem(""),
+            MenuItem("Loaded"),
+        ]
+        if not registry.addons:
+            items.append(MenuItem("none",
+                                  directory if registry.enabled
+                                  else "addons are disabled here", None))
+        for addon in registry.addons:
+            role = {"failed": "danger", "off": "dim"}.get(addon.status, "base")
+            keys = " ".join(k.char for k in addon.keys)
+            hint = addon.doc or addon.summary()
+            items.append(MenuItem(f"{addon.name}"
+                                  + (f"  [{keys}]" if keys else ""),
+                                  f"{addon.status} · {hint}", ("show", addon),
+                                  role=role))
+        self.open_menu("Addons", items, self._addon_action, footer=directory)
+
+    def _addon_action(self, action) -> None:
+        kind, payload = action
+        if kind == "reload":
+            self.notify(self.session.addons.reload(), "accent", seconds=6)
+            self.refresh_derived(force=True)
+        elif kind == "new":
+            self._ask("Name for the new addon: ", "", self._scaffold_addon)
+        elif kind == "cards":
+            self._dashboard_menu()
+        elif kind == "show":
+            self._show_addon(payload)
+
+    def _show_addon(self, addon) -> None:
+        """An addon's error is the thing worth reading; otherwise its path."""
+        if addon.error:
+            first = [line for line in addon.error.strip().split("\n") if line]
+            self.notify(f"{addon.name}: {first[-1]}", "danger", seconds=20)
+            return
+        self.notify(f"{addon.name} — {addon.summary()} · {addon.path}",
+                    "accent", seconds=10)
+
+    def _scaffold_addon(self, name: str) -> None:
+        try:
+            path = self.session.addons.scaffold(name.strip())
+        except FileExistsError as exc:
+            self.notify(f"{exc} already exists", "warn", seconds=8)
+            return
+        except Exception as exc:
+            self.notify(f"Could not write the addon: {exc}", "danger", seconds=8)
+            return
+        self.session.addons.reload()
+        self.refresh_derived(force=True)
+        self.notify(f"Wrote {path} — edit it, then A → Reload", "ok", seconds=12)
+
     # ---- actions ----------------------------------------------------------
 
     def _move(self, target: str, delta: int) -> None:
@@ -982,6 +1104,7 @@ class App:
             "stats": 1,
             "osint": self.osint_length,
             "devices": len(self.device_rows),
+            "dash": self.dash_length,
         }.get(target, 1)
 
     def _page_size(self, target: str) -> int:
@@ -1273,7 +1396,8 @@ class App:
             ALERTS_VIEW: ("Security alerts", f"sorted by {self.alert_sort}"),
             HOSTS_VIEW: ("Hosts", f"sorted by {self.host_sort}"),
             RECON_VIEW: ("Network recon", "ARP sweep"),
-            OSINT_VIEW: ("OSINT", self.osint_target or "no target")}
+            OSINT_VIEW: ("OSINT", self.osint_target or "no target"),
+            DASH_VIEW: ("Dashboard", self._dash_hint())}
         title, hint = titles.get(self.view, (VIEWS[self.view], ""))
         self._pane(top - 1, 0, height + 2, width, title, True, hint)
         rect = (top, 1, height, width - 2)
@@ -1283,7 +1407,8 @@ class App:
                     ALERTS_VIEW: views.draw_alerts,
                     HOSTS_VIEW: views.draw_hosts,
                     RECON_VIEW: views.draw_recon,
-                    OSINT_VIEW: views.draw_osint}[self.view]
+                    OSINT_VIEW: views.draw_osint,
+                    DASH_VIEW: views.draw_dashboard}[self.view]
 
         if self.view == DEVICES_VIEW and self.device_layout == "grid":
             # Give the grid the room on a short terminal; the detail pane
@@ -1300,7 +1425,10 @@ class App:
             return
 
         renderer(self.stdscr, rect, self)
-        if self.view == DEVICES_VIEW:
+        if self.view == DASH_VIEW:
+            # The board scrolls as a whole; there are no rows to click.
+            self._row_hits = {}
+        elif self.view == DEVICES_VIEW:
             # The address list starts two rows into the pane, and the identity
             # pane beside it is not clickable.
             self._device_hits = (top + 2, max(0, height - 2))
@@ -1367,7 +1495,7 @@ class App:
             col += addstr(self.stdscr, row, col, f" {label}   ", pal("status"))
 
     def _hint_pairs(self):
-        common = [("?", "help"), ("q", "quit"), ("1-7", "views")]
+        common = [("?", "help"), ("q", "quit"), (f"1-{len(VIEWS)}", "views")]
         if self.view == PACKETS_VIEW:
             return common + [("/", "filter"), ("d", "detail"), ("f", "follow"),
                              ("t/u/i/a", "protos"), ("n", "nmap"), ("w", "save")]
@@ -1387,6 +1515,9 @@ class App:
         if self.view == OSINT_VIEW:
             return common + [("r", "passive"), ("R", "all"), ("x", "target"),
                              ("Enter", "source"), ("n", "nmap")]
+        if self.view == DASH_VIEW:
+            return common + [("Enter", "cards"), ("A", "addons"),
+                             ("↑↓", "scroll")]
         return common + [("T", "theme")]
 
     def _draw_help(self, height: int, width: int) -> None:

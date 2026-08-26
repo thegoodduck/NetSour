@@ -65,6 +65,15 @@ def build_parser() -> argparse.ArgumentParser:
                         help="disable geolocation and OSINT lookups entirely")
     parser.add_argument("-l", "--list-interfaces", action="store_true",
                         help="list capture interfaces and exit")
+    parser.add_argument("--addon-dir", default="", metavar="PATH",
+                        help="load addons from PATH instead of "
+                             "~/.config/netsour/addons")
+    parser.add_argument("--no-addons", action="store_true",
+                        help="do not load addons at all")
+    parser.add_argument("--list-addons", action="store_true",
+                        help="list the addons that would load, and exit")
+    parser.add_argument("--new-addon", default="", metavar="NAME",
+                        help="write a starter addon called NAME and exit")
     parser.add_argument("-V", "--version", action="version",
                         version=f"NetSour {__version__}")
     return parser
@@ -100,6 +109,33 @@ def choose_interface(interfaces: List[str]) -> Optional[str]:
     return None
 
 
+def build_registry(args):
+    """The addon registry the session and the dashboard will share."""
+    from .addons import AddonRegistry, addon_dir
+
+    directories = [args.addon_dir] if args.addon_dir else [addon_dir()]
+    registry = AddonRegistry(directories=directories,
+                             enabled=not args.no_addons)
+    registry.load()
+    return registry
+
+
+def list_addons(registry) -> int:
+    """`--list-addons`: what would load, and what is broken. Never starts curses."""
+    print(f"Addon directory: {registry.directory}")
+    if not registry.addons:
+        print("  no addons found - 'netsour --new-addon NAME' writes a starter")
+    for addon in registry.addons:
+        print(f"  {addon.name:<20} {addon.status:<7} {addon.summary()}")
+        if addon.error:
+            for line in addon.error.strip().split("\n"):
+                print(f"      {line}")
+    cards = registry.panel_specs(include_hidden=True)
+    print(f"Dashboard cards: {len(cards)} "
+          f"({sum(1 for c in cards if c.source != 'built-in')} from addons)")
+    return 1 if any(a.status == "failed" for a in registry.addons) else 0
+
+
 def main(argv: Optional[List[str]] = None) -> int:
     args = build_parser().parse_args(argv)
     _silence_scapy()
@@ -107,6 +143,17 @@ def main(argv: Optional[List[str]] = None) -> int:
     from .capture import is_root, list_interfaces
     from .session import Session
     from .ui.app import App
+
+    registry = build_registry(args)
+    if args.new_addon:
+        try:
+            print(f"Wrote {registry.scaffold(args.new_addon)}")
+        except FileExistsError as exc:
+            print(f"{exc} already exists", file=sys.stderr)
+            return 1
+        return 0
+    if args.list_addons:
+        return list_addons(registry)
 
     interfaces = list_interfaces()
     if args.list_interfaces:
@@ -138,7 +185,8 @@ def main(argv: Optional[List[str]] = None) -> int:
                       buffer_size=max(100, args.buffer),
                       promisc=not args.no_promisc,
                       enable_rdns=not args.no_rdns,
-                      enable_geo=not args.no_geo)
+                      enable_geo=not args.no_geo,
+                      addons=registry)
     session.start()
 
     crash = None

@@ -31,7 +31,7 @@ the wire without leaving the keyboard.
 - Bounded ring buffer, so a long capture never exhausts memory
 - Export the buffer — or only what your filter shows — back out to pcap
 
-**Six views**
+**Nine views**
 | View | What it shows |
 | --- | --- |
 | Packets | Scrolling table plus a detail pane: dissection tree, hex dump, reassembled stream, geolocation, Nmap results |
@@ -42,6 +42,7 @@ the wire without leaving the keyboard.
 | Hosts | Every endpoint seen — address, rDNS name, MAC, hardware vendor, traffic totals |
 | Recon | ARP sweep of the local /24, drawn as a topology tree |
 | OSINT | Everything known about one target: registry, DNS, TLS, HTTP, path, ports |
+| Dash | Your dashboard: a board of cards you choose, plus anything your addons draw |
 
 **Threat detection**, running live over the capture stream:
 port scans · host sweeps · SYN floods · traffic and ICMP floods · ARP spoofing
@@ -189,6 +190,49 @@ exists nowhere returns **zero** hits; sites behind bot protection are reported
 `inconclusive` rather than guessed at. A match means the *name* exists there,
 not that it is the same person.
 
+**Dashboard and addons** — the Dash view (`9`) is a board of cards. `Enter`
+picks which ones it shows; the choice is remembered. Anything an addon
+contributes lands on the same board.
+
+An addon is one Python file in `~/.config/netsour/addons`. `netsour --new-addon
+NAME` writes a working starter, or press `A` → *New addon…* from inside the UI
+and `A` → *Reload* after editing — no restart, no capture lost.
+
+```python
+from netsour.addon import alert, key, on_packet, panel
+
+queries = {}
+
+
+@on_packet                       # capture thread, once per packet
+def watch(pkt):
+    if pkt.proto.endswith("DNS") and pkt.hostname:
+        queries[pkt.hostname] = queries.get(pkt.hostname, 0) + 1
+    if pkt.dport == 23:
+        alert("Telnet in use", f"{pkt.src} → {pkt.dst}", "medium", pkt)
+
+
+@panel("Busiest lookups")        # one card on the dashboard
+def card(ctx):
+    top = sorted(queries.items(), key=lambda kv: -kv[1])[:5]
+    peak = max([n for _, n in top], default=1)
+    return [f"{host[:20]:<20} {ctx.bar(n, peak, 8)} {n}" for host, n in top] \
+        or [("nothing yet", "dim")]
+
+
+@key("z", "reset the counts")    # UI thread, when 'z' is pressed
+def reset(ui):
+    queries.clear()
+    ui.notify("lookup counts cleared", "ok")
+```
+
+Hooks run inside the session lock, which is what makes reading capture state
+from a panel safe, and everything an addon raises is caught: a panel that throws
+shows its error on its own card, and an addon that keeps throwing is switched
+off with its traceback kept in the `A` menu. A broken addon cannot stop capture
+or take down the UI, and addon key bindings are tried last, so they can never
+shadow a NetSour key.
+
 ## Install
 
 ```bash
@@ -231,6 +275,10 @@ netsour --list-interfaces
 | `--fps` | UI refresh rate (default 12) |
 | `--no-promisc` | leave the interface out of promiscuous mode |
 | `--no-rdns` / `--no-geo` | disable background name / geolocation lookups |
+| `--addon-dir` | load addons from somewhere other than `~/.config/netsour/addons` |
+| `--no-addons` | do not load addons at all |
+| `--list-addons` | list what would load (and what is broken), then exit |
+| `--new-addon NAME` | write a starter addon called NAME, then exit |
 
 ## Keys
 
@@ -238,7 +286,7 @@ Press `?` in the app for the full reference.
 
 | | |
 | --- | --- |
-| `1`–`8`, `←` `→` | switch views (arrows move within the device list) |
+| `1`–`9`, `←` `→` | switch views (arrows move within the device list) |
 | `↑` `↓` `j` `k`, `PgUp` `PgDn`, `g` `G` | navigate |
 | `Tab` | move focus between the packet list and the detail pane |
 | `d` | cycle the detail pane: tree → hex → stream → geo → nmap |
@@ -259,6 +307,8 @@ Press `?` in the app for the full reference.
 | `Enter` | in Devices: show only that device's traffic |
 | `Enter` | in Alerts: pivot to the flow, packet, filter, OSINT or a scan |
 | `r` `R` `x` | in OSINT: run passive · run everything · set the target |
+| `Enter` | in Dash: choose which cards the board shows |
+| `A` | addons: reload from disk, scaffold a new one, read an addon's error |
 | `T` | choose a colour theme · `q` quit |
 
 ## Design notes
@@ -285,10 +335,11 @@ asks for confirmation naming the host first.
 python -m unittest discover -s tests -t .
 ```
 
-302 tests covering dissection, the detectors, session and buffer behaviour,
+358 tests covering dissection, the detectors, session and buffer behaviour,
 pcap round-trips, device identification and its evidence rules, OSINT gating and
 parsing, social attribution and its observed/inferred boundary,
-profile-verification rules, menu navigation, a
+profile-verification rules, menu navigation, addon loading and isolation,
+dashboard layout, a
 headless curses pass that draws every view at four terminal sizes in every
 theme, and a concurrency test that renders while a writer thread floods the
 session.

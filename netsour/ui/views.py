@@ -1015,3 +1015,128 @@ def draw_device_identity(win, rect, app) -> None:
             break
         addstr(win, row, x, f"{label:<10}", pal("dim"))
         addstr(win, row, x + 11, ellipsize(value, max(0, width - 11)), pal(role))
+
+
+# ---- dashboard -----------------------------------------------------------
+
+# A card narrower than this cannot hold a label, a bar and a value, so the
+# board drops to fewer columns rather than shredding every row.
+CARD_MIN_WIDTH = 34
+CARD_GAP = 1
+CARD_CHROME = 4                      # "│ " + text + " │"
+
+
+def dashboard_columns(width: int) -> int:
+    """How many card columns fit, between one and three."""
+    return max(1, min(3, (width + CARD_GAP) // (CARD_MIN_WIDTH + CARD_GAP)))
+
+
+def dashboard_card_width(width: int) -> int:
+    """The text width inside one card - what panels are told to render to."""
+    count = dashboard_columns(width)
+    outer = (width - (count - 1) * CARD_GAP) // count
+    return max(10, outer - CARD_CHROME)
+
+
+def dashboard_layout(panels, width: int):
+    """Place cards into columns, shortest column first, order preserved.
+
+    Returns (placements, total_height) where a placement is
+    (column, row offset, panel) - the board is then drawn with one vertical
+    scroll offset applied to every column.
+    """
+    count = dashboard_columns(width)
+    heights = [0] * count
+    placements = []
+    for panel in panels:
+        column = heights.index(min(heights))
+        placements.append((column, heights[column], panel))
+        heights[column] += max(3, len(panel.lines) + 2) + 1
+    return placements, max(heights, default=0)
+
+
+def draw_dashboard(win, rect, app) -> None:
+    """The card board: built-in cards and whatever addons contributed."""
+    y, x, height, width = rect
+    pal = app.pal
+    panels = app.derived.panels
+    if not panels:
+        hidden = len(app.session.addons.panel_specs(include_hidden=True))
+        message = ("Every card is hidden - press Enter to choose cards."
+                   if hidden else "No dashboard cards are registered.")
+        addstr(win, y + 1, x + 2, message, pal("dim"))
+        addstr(win, y + 3, x + 2, "A opens the addons menu.", pal("faint"))
+        app.dash_length = 0
+        return
+
+    placements, total = dashboard_layout(panels, width)
+    app.dash_length = total
+    offset = app.clamp_scroll("dash", total, height)
+    count = dashboard_columns(width)
+    outer = (width - (count - 1) * CARD_GAP) // count
+
+    for column, row, panel in placements:
+        top = y + row - offset
+        card_height = max(3, len(panel.lines) + 2)
+        if top >= y + height or top + card_height <= y:
+            continue                       # entirely scrolled out of the pane
+        _draw_card(win, top, x + column * (outer + CARD_GAP), outer, panel,
+                   app, y, y + height)
+
+
+def _draw_card(win, top: int, x: int, outer: int, panel, app, limit_top: int,
+               limit_bottom: int) -> None:
+    """One card, clipped to the pane rather than the window.
+
+    `addstr` already clips to the screen, but the board scrolls inside a pane
+    with a border and a hint line below it, so rows outside the pane have to be
+    dropped here or a scrolled card would paint over the chrome.
+    """
+    pal, g = app.pal, app.glyphs
+    inner = outer - CARD_CHROME
+    edge = pal("frame_hot") if panel.source != "built-in" else pal("frame")
+    rows = [top]
+
+    def place(row_y: int, draw) -> None:
+        if limit_top <= row_y < limit_bottom:
+            draw(row_y)
+
+    title = ellipsize(f" {panel.title} ", outer - 4)
+    tail = max(0, outer - 2 - len(title) - 1)
+
+    def header(row_y: int) -> None:
+        addstr(win, row_y, x, g["tl"] + g["h"], edge)
+        addstr(win, row_y, x + 2, title,
+               pal("accent") if panel.source == "built-in" else pal("header"))
+        addstr(win, row_y, x + 2 + len(title), g["h"] * tail + g["tr"], edge)
+
+    place(top, header)
+
+    for index, line in enumerate(panel.lines or [_placeholder_line(panel)]):
+        row_y = top + 1 + index
+        rows.append(row_y)
+
+        def body(row_y: int, line=line) -> None:
+            addstr(win, row_y, x, g["v"], edge)
+            addstr(win, row_y, x + 2, ellipsize(line.text, inner),
+                   pal(line.role if line.role else "base"))
+            addstr(win, row_y, x + outer - 1, g["v"], edge)
+
+        place(row_y, body)
+
+    footer_y = top + max(2, len(panel.lines) + 1)
+
+    def footer(row_y: int) -> None:
+        addstr(win, row_y, x, g["bl"] + g["h"] * (outer - 2) + g["br"], edge)
+        if panel.error:
+            addstr(win, row_y, x + 2, ellipsize(f" {panel.error} ", outer - 4),
+                   pal("danger"))
+
+    place(footer_y, footer)
+
+
+def _placeholder_line(panel):
+    """What a card shows when its panel returned nothing at all."""
+    from ..addons import Line
+
+    return Line(panel.error or "no data", "danger" if panel.error else "dim")

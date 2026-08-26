@@ -15,6 +15,7 @@ from collections import deque
 from dataclasses import dataclass, field
 from typing import Deque, List, Optional
 
+from .addons import AddonRegistry, PanelData
 from .capture import (CaptureEngine, default_gateway, local_prefix,
                       write_pcap)
 from .devices import DeviceRegistry
@@ -53,6 +54,7 @@ class Derived:
     recon_error: str = ""
     recon_time: float = 0.0
     buffered: int = 0
+    panels: List[PanelData] = field(default_factory=list)
 
 
 @dataclass
@@ -96,7 +98,8 @@ class Session:
     def __init__(self, iface: str = "", bpf: str = "", pcap_path: str = "",
                  buffer_size: int = 20000, promisc: bool = True,
                  enable_rdns: bool = True, enable_geo: bool = True,
-                 thresholds: Optional[Thresholds] = None):
+                 thresholds: Optional[Thresholds] = None,
+                 addons: Optional[AddonRegistry] = None):
         self.iface = iface
         self.bpf = bpf
         self.pcap_path = pcap_path
@@ -132,6 +135,17 @@ class Session:
         self.capture = CaptureEngine(iface=iface, on_packet=self._on_packet,
                                      bpf=bpf, promisc=promisc, pcap_path=pcap_path)
 
+        # Addons see every packet and draw onto the dashboard. They run inside
+        # the session lock — that is what makes reading capture state from a
+        # panel safe — and the registry swallows whatever they raise.
+        if addons is None:
+            # No addon directory, but the built-in dashboard cards still come
+            # through the registry, so the board is populated either way.
+            addons = AddonRegistry(directories=[], enabled=False)
+            addons.load()
+        self.addons = addons
+        self.addons.attach(self)
+
     # ---- capture ----------------------------------------------------------
 
     def start(self) -> None:
@@ -155,6 +169,7 @@ class Session:
             self.flows.add(rec)
             self.alerts.inspect(rec)
             self.social.inspect(rec)
+            self.addons.dispatch_packet(rec)
             if self.filter.allows(rec):
                 self.view.append(rec)
 
@@ -194,7 +209,8 @@ class Session:
     def derive(self, flow_sort: str = "bytes", alert_sort: str = "time",
                host_sort: str = "traffic", want_flows: bool = False,
                want_alerts: bool = False, want_hosts: bool = False,
-               want_stats: bool = False, want_devices: bool = False) -> Derived:
+               want_stats: bool = False, want_devices: bool = False,
+               want_panels: bool = False) -> Derived:
         """Build everything the UI needs for one frame, under a single lock.
 
         The `want_*` flags skip work for views that are not on screen; the
@@ -226,6 +242,11 @@ class Session:
                 bundle.stats.dropped = self.stats.dropped
                 bundle.stats.buffer_len = len(self.records)
                 bundle.stats.flow_count = len(self.flows.flows)
+            if want_panels:
+                # Panels read live structures, which is only safe here: the
+                # lock is held and everything they return is a plain string.
+                bundle.panels = self.addons.render_panels(
+                    self, self.stats.snapshot())
             return bundle
 
     def _host_rows(self, sort: str = "traffic") -> List[dict]:
@@ -273,6 +294,7 @@ class Session:
             self.social.clear()
             self.stats.reset()
             self._counter = 0
+            self.addons.dispatch_clear()
 
     def save_pcap(self, path: str, visible_only: bool = False) -> str:
         """Write the buffer to `path`; returns a status message."""

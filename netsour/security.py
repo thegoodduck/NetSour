@@ -124,6 +124,19 @@ class AlertEngine:
                           key=lambda a: (SEVERITY_ORDER.get(a.severity, 9), -a.ts))
         return sorted(self.alerts, key=lambda a: a.ts, reverse=True)
 
+    def emit(self, title: str, detail: str = "", severity: str = MEDIUM,
+             rec: Optional[PacketRecord] = None, key: str = "",
+             category: str = "Addon") -> None:
+        """Raise a finding from outside the built-in detectors — an addon.
+
+        Deduplicated on the same cooldown as everything else, so an addon that
+        calls this per packet gets one alert with a count, not a wall of them.
+        """
+        if severity not in SEVERITY_ORDER:
+            severity = MEDIUM
+        self._fire(key or f"addon:{category}:{title}", severity, category,
+                   title, detail, rec)
+
     def clear(self) -> None:
         self.alerts.clear()
         self._last_fired.clear()

@@ -1054,3 +1054,124 @@ class TestDevicesView(unittest.TestCase):
         position = row.index(alerts_tab)
         tail = row[position:position + len(alerts_tab) + 4]
         self.assertRegex(tail, r"\d+\s*$|\d")
+
+
+class TestDashboardView(unittest.TestCase):
+    """The card board: layout, scrolling, and the pickers behind it.
+
+    The registry writes the card layout to disk, so every app here is built
+    against a throwaway config directory rather than the user's own.
+    """
+
+    def setUp(self):
+        import tempfile
+
+        self.tmp = tempfile.TemporaryDirectory()
+        self._config = os.environ.get("NETSOUR_CONFIG_HOME")
+        os.environ["NETSOUR_CONFIG_HOME"] = self.tmp.name
+        self.addCleanup(self._restore)
+
+    def _restore(self):
+        if self._config is None:
+            os.environ.pop("NETSOUR_CONFIG_HOME", None)
+        else:
+            os.environ["NETSOUR_CONFIG_HOME"] = self._config
+        self.tmp.cleanup()
+
+    def _app(self, width=140, height=44):
+        from netsour.ui.app import DASH_VIEW, App
+
+        session = Session(iface="", enable_rdns=False, enable_geo=False)
+        for packet in (factory.tcp(dport=80, flags="PA", payload=b"GET /"),
+                       factory.dns_query(), factory.udp(dport=123),
+                       factory.arp(), factory.icmp()):
+            session._on_packet(packet)
+        app = App(screen(width, height), session)
+        app.pal.init()
+        app.view = DASH_VIEW
+        app.refresh_derived(force=True)
+        return app
+
+    @staticmethod
+    def _screen_text(app) -> str:
+        height = app.stdscr.getmaxyx()[0]
+        return "\n".join(app.stdscr.instr(row, 0).decode("utf-8", "replace")
+                         for row in range(height))
+
+    def test_the_board_draws_every_card(self):
+        app = self._app()
+        app.draw()
+        text = self._screen_text(app)
+        for title in ("Capture", "Throughput", "Protocol mix", "Alerts"):
+            self.assertIn(title, text)
+        self.assertGreater(app.dash_length, 0)
+
+    def test_hiding_a_card_takes_it_off_the_board(self):
+        app = self._app()
+        app.draw()
+        self.assertIn("Protocol mix", self._screen_text(app))
+        app.session.addons.toggle_panel("protocols")
+        app.refresh_derived(force=True)
+        app.draw()
+        self.assertNotIn("Protocol mix", self._screen_text(app))
+
+    def test_an_addon_card_is_drawn_beside_the_builtin_ones(self):
+        from netsour.addons import AddonRegistry
+
+        directory = os.path.join(self.tmp.name, "addons")
+        os.makedirs(directory)
+        with open(os.path.join(directory, "demo.py"), "w",
+                  encoding="utf-8") as handle:
+            handle.write('from netsour.addon import panel\n\n\n'
+                         '@panel("Demo card", key="demo")\n'
+                         'def card(ctx):\n'
+                         '    return ["addon line"]\n')
+        registry = AddonRegistry(directories=[directory])
+        registry.load()
+        app = self._app()
+        app.session.addons = registry
+        registry.attach(app.session)
+        app.refresh_derived(force=True)
+        app.draw()
+        text = self._screen_text(app)
+        self.assertIn("Demo card", text)
+        self.assertIn("addon line", text)
+
+    def test_the_board_scrolls_without_painting_over_the_chrome(self):
+        app = self._app(width=70, height=20)          # one column, tall board
+        app.draw()
+        self.assertGreater(app.dash_length, 20)
+        for _ in range(200):
+            app.handle_key(curses.KEY_DOWN)
+        app.draw()
+        self.assertLessEqual(app.scroll["dash"], app.dash_length)
+        self.assertIn("NetSour", self._screen_text(app).split("\n")[0])
+
+    def test_enter_opens_the_card_chooser_and_a_choice_toggles_a_card(self):
+        app = self._app()
+        app.handle_key(10)
+        self.assertIsNotNone(app.menu)
+        self.assertEqual(app.menu.title, "Dashboard")
+        keys = [item.value for item in app.menu.items if item.value]
+        self.assertIn("capture", keys)
+        app.menu.callback("capture")
+        self.assertIn("capture", app.session.addons.hidden)
+
+    def test_the_addons_menu_lists_what_loaded(self):
+        app = self._app()
+        app.handle_key(ord("A"))
+        self.assertIsNotNone(app.menu)
+        self.assertEqual(app.menu.title, "Addons")
+        actions = [item.value[0] for item in app.menu.items
+                   if isinstance(item.value, tuple)]
+        self.assertIn("reload", actions)
+        self.assertIn("cards", actions)
+
+    def test_an_empty_board_explains_itself(self):
+        app = self._app()
+        for spec in list(app.session.addons.panel_specs()):
+            app.session.addons.toggle_panel(spec.key)
+        app.refresh_derived(force=True)
+        app.draw()
+        self.assertEqual(app.derived.panels, [])
+        self.assertIn("press Enter to choose cards", self._screen_text(app))

@@ -7,7 +7,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 **NetSour** is a terminal packet sniffer, protocol analyzer and network recon
 tool built on Python + Scapy + curses. It captures live traffic (root required),
 dissects it down to the application layer, tracks conversations and hosts, runs
-live threat detection, and presents all of it in a six-view TUI.
+live threat detection, and presents all of it in a nine-view TUI — the last of
+which is a dashboard of cards that single-file addons can add to.
 
 ## Commands
 
@@ -23,6 +24,9 @@ sudo apt install nmap
 sudo netsour                   # interactive interface picker
 sudo netsour -i eth0 -f 'tcp port 443'
 netsour -r capture.pcap        # offline replay, no root needed
+netsour --new-addon dnstop     # scaffold an addon, then edit it
+netsour --list-addons          # what loads, and what is broken
+netsour --no-addons            # load none of it
 python -m netsour --help
 sudo python main.py            # legacy shim, still works
 
@@ -47,6 +51,9 @@ netsour/
   flows.py       FlowTable: bidirectional conversation aggregation
   stats.py       counters, per-second history, byte/duration formatting
   security.py    AlertEngine: the live threat detectors
+  addons.py      AddonRegistry: loads addon files, owns every contribution
+  addon.py       the decorators an addon file imports (the public API)
+  dashboard.py   the built-in dashboard cards, written against that same API
   enrich.py      async rDNS / geo-IP / MAC vendor / Nmap, plus arp_sweep
   osint.py       OsintEngine: rDNS, geo, RDAP, DNS, TLS, HTTP, traceroute,
                  social attribution, username lookup
@@ -77,6 +84,10 @@ One capture thread, one UI thread, plus small worker pools for enrichment.
   holds it; `App.visible` / `flow_rows` / `alert_rows` / `host_rows` are
   properties over it, and views must never reach past them to `session.records`,
   `session.flows`, `session.stats` or the recon fields.
+- Addon code runs on both threads but never concurrently: packet hooks are
+  called from `Session._on_packet` and panels from `Session.derive()`, and both
+  hold `Session.lock`. That is what lets a panel read `session.records` or the
+  flow table directly — and why a slow panel costs capture throughput.
 - Enrichment (rDNS, geo, Nmap) runs on bounded `_Worker` pools in `enrich.py`.
   These are the only things that touch the network beyond capture, and none of
   them is ever called from a render path.
@@ -104,6 +115,11 @@ One capture thread, one UI thread, plus small worker pools for enrichment.
 - **Detectors must never raise.** `AlertEngine.inspect` and
   `SocialTracker.inspect` swallow exceptions by design — a bug in either must
   not stop capture.
+- **Addons are untrusted the same way.** Every call into addon code goes through
+  `AddonRegistry._call` or the `try` in `render_panels`, which record the
+  traceback and disable the addon after `MAX_FAILURES`. Calling an addon hook
+  directly anywhere reintroduces the crash it exists to prevent. A panel returns
+  plain strings; nothing live may escape a card into the render path.
 - **`PacketRecord.hostname` is a target, never an identity.** It holds whatever
   the packet is *about* — a TLS SNI, a DNS question, an HTTP Host. Naming a
   device with it labelled a router `api.anthropic.com`, because the router was
@@ -134,6 +150,21 @@ working once already. Then add a renderer in `ui/views.py`, register it in the
 `renderer` dict in `_draw_view`, give it a row count in `_row_count` and a
 hit-area row offset in the `header_rows` dict. The digit keys size themselves
 off `len(VIEWS)`. Tests must use the constants too.
+
+**An addon**: nothing in the codebase — that is the point. It is one file in
+`~/.config/netsour/addons` importing `netsour.addon`; `AddonRegistry.scaffold`
+writes the template, and `A` → Reload in the UI re-executes it. Extending what
+addons *can* do means adding a decorator to `addon.py`, a list on `Addon`, and a
+dispatch point in `AddonRegistry` — keep the three in step, and keep the
+decorator working when no registry is loading (an addon file must stay
+importable on its own, which is what makes it testable).
+
+**A dashboard card**: append to `BUILTINS` in `dashboard.py` — a key, a title, a
+function `(ctx) -> lines` and a sort order. Built-in cards go through the addon
+registry like any other panel, so anything a card needs from `PanelContext`
+becomes API for addons too; add it there rather than reaching around it. Cards
+render before the board is laid out, so `ctx.width` is all a card knows about
+its size.
 
 **A device signal**: add to `SERVICE_KINDS`, `VENDOR_KINDS`, `NAME_KINDS` or
 `PORT_KINDS` in `devices.py`. Signals vote in `classify()` **by weight**
@@ -176,7 +207,7 @@ heading and loses the hint.
 ## Testing
 
 `tests/` mirrors the modules: `test_dissect`, `test_security`, `test_session`,
-`test_osint`, `test_menu`, `test_ui`, `test_cli`. `tests/factory.py` builds packets and round-trips them
+`test_osint`, `test_menu`, `test_ui`, `test_cli`, `test_addons`. `tests/factory.py` builds packets and round-trips them
 through bytes so they behave like captured frames rather than unbuilt scapy
 objects.
 
@@ -184,6 +215,11 @@ objects.
 and draws every view at four terminal sizes. That screen is a module-level
 singleton resized between tests — repeatedly entering `initscr` leaves drain
 threads blocked on closed descriptors, which hangs the suite.
+
+`test_addons.py` writes addon files into a temporary directory and points
+`NETSOUR_CONFIG_HOME` at it — the registry persists the dashboard layout to
+disk, so any test that toggles a card must do the same or it edits the
+developer's own configuration.
 
 Detector tests supply timestamps explicitly, so none of them depends on the
 wall clock. When adding a detector, add both a positive case and a
@@ -227,6 +263,12 @@ release, using the `PYPI_PASSWORD` secret. Version lives in `pyproject.toml` and
   sweep itself would invent one per empty address.
   `DeviceRegistry` also filters to the local /24 and drops multicast, network
   and broadcast addresses — they are private-looking but are not devices.
+- **An addon does not show up** — `netsour --list-addons` prints its status and
+  traceback without starting curses; inside the UI, `A` lists the same thing and
+  reloads. Files starting with `_` are skipped, and an addon that raised
+  `MAX_FAILURES` times is disabled until the next reload, not silently ignored.
+- **A dashboard card vanished** — the layout is remembered in
+  `~/.config/netsour/dashboard.json`; `Enter` on the Dash view brings it back.
 - **OSINT source always errors** — check `Source.applies`: DNS records only make
   sense for a hostname, reverse DNS only for an IP. The picker greys out
   inapplicable sources rather than letting them fail.
