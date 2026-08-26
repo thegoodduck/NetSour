@@ -1,3 +1,6 @@
-scapy
+# Core - packet capture and dissection.
+scapy>=2.5
+
+# Optional - the 'n' key's Nmap integration. The nmap binary must also be
+# installed (apt install nmap). Everything else works without it.
 python-nmap
-ipinfo

@@ -5,3 +5,13 @@ __pycache__/
 new_main.py
 netsour_debug.log
 *.log
+
+# Packaging artifacts
+netsour.egg-info/
+*.egg-info/
+build/
+dist/
+
+# Captures
+*.pcap
+*.pcapng
