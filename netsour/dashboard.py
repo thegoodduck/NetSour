@@ -8,6 +8,7 @@ the board decides where the card lands and how wide it is.
 
 from __future__ import annotations
 
+import os
 from typing import List
 
 from .addons import Line, PanelSpec
@@ -45,7 +46,8 @@ def capture_card(ctx) -> List[Line]:
         state, role = "live", "ok"
     else:
         state, role = "stopped", "warn"
-    source = session.pcap_path or session.iface or "any"
+    # The basename, like the title bar: a pcap path is longer than any card.
+    source = os.path.basename(session.pcap_path) or session.iface or "any"
     lines = [ctx.pair("source", source, "accent"),
              ctx.pair("state", state, role),
              ctx.pair("uptime", ctx.duration(stats.elapsed), "dim"),

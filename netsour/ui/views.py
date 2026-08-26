@@ -642,6 +642,10 @@ def draw_osint(win, rect, app) -> None:
     header = f"{target}"
     if kind == "username":
         scope = "account name"
+    elif kind == "host":
+        # is_private() answers True for anything it cannot parse, which is the
+        # right default for gating a lookup and the wrong label for a name.
+        scope = "hostname"
     elif is_private(target):
         scope = "private / RFC1918"
     else:

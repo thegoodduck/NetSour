@@ -734,6 +734,20 @@ class TestOsintView(unittest.TestCase):
             app._run_osint_source("rdap")
             run.assert_called_once()
 
+    def test_a_hostname_target_is_not_labelled_private(self):
+        """`is_private` says True for anything unparsable - names included."""
+        from netsour.ui.app import OSINT_VIEW
+
+        app = self._app()
+        app.view = OSINT_VIEW
+        app.osint_target = "example.com"
+        app.refresh_derived(force=True)
+        app.draw()
+        header = app.stdscr.instr(3, 0).decode("utf-8", "replace")
+        self.assertIn("example.com", header)
+        self.assertIn("hostname", header)
+        self.assertNotIn("private", header)
+
     def test_the_view_draws_with_and_without_a_target(self):
         from netsour.ui.app import OSINT_VIEW
 

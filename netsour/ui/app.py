@@ -33,7 +33,7 @@ FLOW_SORTS = ["bytes", "packets", "last", "duration", "rate"]
 
 HELP_SECTIONS = [
     ("Views", [
-        ("1 – 8", "jump straight to a view"),
+        (f"1 – {len(VIEWS)}", "jump straight to a view"),
         ("← / →", "previous / next view"),
         ("Tab", "move focus between the packet list and the detail pane"),
         ("?", "show or hide this help"),
